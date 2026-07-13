@@ -52,16 +52,6 @@ npm ci
 npm run dev                    # Start dev server → http://localhost:5173
 ```
 
-### Default Seed Credentials
-
-| Role | Username | Password |
-|------|----------|----------|
-| Admin | `admin` | `Admin@12345` |
-| ODS Operator | `ods_op` | `OdsOp@12345` |
-| RMPM Operator | `rmpm_op` | `Rmpm@12345` |
-
-> ⚠️ Change all passwords immediately after first deployment.
-
 ## Key Business Rules
 
 1. **All inventory quantities are `DECIMAL(18,4)`** — no floating-point arithmetic.
