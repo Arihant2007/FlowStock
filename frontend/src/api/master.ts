@@ -1,0 +1,135 @@
+import client from './client'
+import type {
+  ApiResponse,
+  WarehouseOut,
+  MaterialOut,
+  SKUOut,
+  BOMVersionOut,
+  BOMUploadPreview,
+} from '@/types/api'
+
+// ─── Warehouses ───────────────────────────────────────────────────────────────
+
+export const masterApi = {
+  // Warehouses
+  listWarehouses: async (page = 1, pageSize = 50) => {
+    const { data } = await client.get<ApiResponse<WarehouseOut[]>>('/master/warehouses', {
+      params: { page, page_size: pageSize },
+    })
+    return data
+  },
+
+  getWarehouse: async (id: string) => {
+    const { data } = await client.get<ApiResponse<WarehouseOut>>(`/master/warehouses/${id}`)
+    return data
+  },
+
+  createWarehouse: async (payload: { name: string; type: string; description: string }) => {
+    const { data } = await client.post<ApiResponse<WarehouseOut>>('/master/warehouses', payload)
+    return data
+  },
+
+  updateWarehouse: async (id: string, payload: { name?: string; description?: string; version: number }) => {
+    const { data } = await client.put<ApiResponse<WarehouseOut>>(`/master/warehouses/${id}`, payload)
+    return data
+  },
+
+  deleteWarehouse: async (id: string) => {
+    const { data } = await client.delete<ApiResponse<{}>>(`/master/warehouses/${id}`)
+    return data
+  },
+
+  // Materials
+  listMaterials: async (page = 1, pageSize = 50) => {
+    const { data } = await client.get<ApiResponse<MaterialOut[]>>('/master/materials', {
+      params: { page, page_size: pageSize },
+    })
+    return data
+  },
+
+  getMaterial: async (id: string) => {
+    const { data } = await client.get<ApiResponse<MaterialOut>>(`/master/materials/${id}`)
+    return data
+  },
+
+  createMaterial: async (payload: {
+    code: string
+    name: string
+    uom: string
+    category_public_id: string
+    type_public_id: string
+    group_public_id?: string
+  }) => {
+    const { data } = await client.post<ApiResponse<MaterialOut>>('/master/materials', payload)
+    return data
+  },
+
+  updateMaterial: async (
+    id: string,
+    payload: { name?: string; uom?: string; version: number }
+  ) => {
+    const { data } = await client.put<ApiResponse<MaterialOut>>(`/master/materials/${id}`, payload)
+    return data
+  },
+
+  deleteMaterial: async (id: string) => {
+    const { data } = await client.delete<ApiResponse<{}>>(`/master/materials/${id}`)
+    return data
+  },
+
+  // SKUs
+  listSKUs: async (page = 1, pageSize = 50) => {
+    const { data } = await client.get<ApiResponse<SKUOut[]>>('/master/skus', {
+      params: { page, page_size: pageSize },
+    })
+    return data
+  },
+
+  getSKU: async (id: string) => {
+    const { data } = await client.get<ApiResponse<SKUOut>>(`/master/skus/${id}`)
+    return data
+  },
+
+  createSKU: async (payload: { code: string; name: string; description: string }) => {
+    const { data } = await client.post<ApiResponse<SKUOut>>('/master/skus', payload)
+    return data
+  },
+
+  updateSKU: async (id: string, payload: { name?: string; description?: string; version: number }) => {
+    const { data } = await client.put<ApiResponse<SKUOut>>(`/master/skus/${id}`, payload)
+    return data
+  },
+
+  deleteSKU: async (id: string) => {
+    const { data } = await client.delete<ApiResponse<{}>>(`/master/skus/${id}`)
+    return data
+  },
+
+  // BOM
+  getActiveBOM: async (skuId: string) => {
+    const { data } = await client.get<ApiResponse<BOMVersionOut>>(`/master/skus/${skuId}/bom`)
+    return data
+  },
+
+  previewBOMUpload: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await client.post<ApiResponse<BOMUploadPreview>>(
+      '/master/boms/upload/preview',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return data
+  },
+
+  commitBOMUpload: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await client.post<ApiResponse<{ skus_updated: number; items_created: number }>>(
+      '/master/boms/upload/commit',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return data
+  },
+}

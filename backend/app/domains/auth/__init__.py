@@ -1,0 +1,1 @@
+"""app/domains/auth package."""
