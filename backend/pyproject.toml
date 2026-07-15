@@ -8,23 +8,23 @@ version = "1.0.0"
 description = "FMCG Warehouse Management System - ODS & RMPM Inventory Transfer Backend"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi==0.115.5",
+    "fastapi==0.139.0",
     "uvicorn[standard]==0.32.1",
     "sqlalchemy==2.0.36",
     "alembic==1.14.0",
     "pydantic[email]==2.10.3",
     "pydantic-settings==2.6.1",
     "psycopg2-binary==2.9.10",
-    "python-jose[cryptography]==3.3.0",
+    "python-jose[cryptography]==3.5.0",
     "pwdlib[argon2]==0.2.1",
     "slowapi==0.1.9",
-    "python-multipart==0.0.19",
+    "python-multipart==0.0.32",
     "pandas==2.2.3",
     "openpyxl==3.1.5",
     "httpx==0.28.1",
     "python-dateutil==2.9.0.post0",
     "structlog==24.4.0",
-    "prometheus-fastapi-instrumentator==7.0.0",
+    "prometheus-fastapi-instrumentator==8.0.2",
 ]
 
 [tool.hatch.build.targets.wheel]

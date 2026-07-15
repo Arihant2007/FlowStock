@@ -184,6 +184,9 @@ export type RequestStatus =
 export interface MaterialRequestItemOut {
   public_id: string
   material_id: number
+  material_public_id: string
+  material_name: string
+  material_code: string
   material_type: string  // 'RM' | 'PM'
   gross_required_qty: string
   remaining_from_previous_day: string

@@ -16,13 +16,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.core.responses import ok, paginate
 from app.domains.auth.dependencies import require_permission
 from app.domains.auth.models import User
-from app.domains.master.models import Material, Warehouse
+from app.domains.master.models import Warehouse
 from app.domains.requests.models import MaterialRequest
 from app.domains.requests.schemas import (
     ApproveRequestPayload,
@@ -107,16 +107,17 @@ def get_request(
         raise NotFoundError(f"Request {request_id} not found.")
 
     loaded = RequestService(db)._get_request(req.id)
-    # The output schema expects material_type per item. It's not stored in the DB,
-    # so we augment the ORM objects before Pydantic validation.
+    # The output schema expects material fields per item.
+    # They are not stored directly in MaterialRequestItem, so we augment the ORM objects.
     for sku in loaded.skus:
         for item in sku.items:
-            mat = db.scalar(
-                select(Material)
-                .where(Material.id == item.material_id)
-                .options(selectinload(Material.material_type))
-            )
-            item.material_type = mat.material_type.name if mat and mat.material_type else "RM"  # type: ignore[attr-defined]
+            if hasattr(item, "material") and item.material:
+                item.material_public_id = item.material.public_id  # type: ignore[attr-defined]
+                item.material_name = item.material.name            # type: ignore[attr-defined]
+                item.material_code = item.material.code            # type: ignore[attr-defined]
+                item.material_type = item.material.material_type.name if item.material.material_type else "RM"  # type: ignore[attr-defined]
+            else:
+                item.material_type = "RM"  # type: ignore[attr-defined]
 
     return ok(MaterialRequestOut.model_validate(loaded).model_dump())
 

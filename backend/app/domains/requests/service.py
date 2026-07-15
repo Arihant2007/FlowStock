@@ -83,24 +83,30 @@ class RequestService:
                 f"Warehouse {payload.ods_warehouse_public_id} not found."
             )
 
-        # Mandatory daily inventory upload check
+        # Mandatory daily inventory upload check (ODS uploads yesterday's closing inventory)
+        from datetime import timedelta
+
         from app.domains.inventory.models import InventorySnapshot
 
+        snapshot_date_required = payload.request_date - timedelta(days=1)
         snapshot_exists = self._db.scalar(
             select(InventorySnapshot)
             .where(InventorySnapshot.warehouse_id == ods_warehouse.id)
-            .where(InventorySnapshot.snapshot_date == payload.request_date)
+            .where(InventorySnapshot.snapshot_date == snapshot_date_required)
             .limit(1)
         )
         if not snapshot_exists:
             from app.core.errors import ValidationError
 
             raise ValidationError(
-                f"ODS Inventory snapshot for {payload.request_date} is missing. "
-                "You must upload today's ODS inventory before creating requests."
+                f"ODS Inventory snapshot for {snapshot_date_required} is missing. "
+                "You must upload yesterday's ODS inventory before creating requests."
             )
 
-        result_skus: list[dict[str, Any]] = []
+        # First pass: Resolve SKUs, BOMs and fetch ODS balance once per material
+        material_totals: dict[int, dict[str, Any]] = {}
+        sku_records = []
+
         for sku_payload in payload.skus:
             sku = self._db.scalar(
                 select(SKU).where(SKU.public_id == sku_payload.sku_public_id)
@@ -109,27 +115,50 @@ class RequestService:
                 raise NotFoundError(f"SKU {sku_payload.sku_public_id} not found.")
 
             bom_version = self._resolve_bom_version(sku.id, payload.request_date)
+            sku_records.append({
+                "sku": sku,
+                "bom_version": bom_version,
+                "planned_qty": sku_payload.planned_production_qty
+            })
+
+            for bom_item in bom_version.items:
+                mat = bom_item.material
+                if mat.id not in material_totals:
+                    remaining = self._inventory.get_balance(mat.id, ods_warehouse.id)
+                    material_totals[mat.id] = {
+                        "material": mat,
+                        "remaining": remaining,
+                    }
+
+        # Second pass: Apportion remaining balance greedily across SKUs
+        result_skus: list[dict[str, Any]] = []
+        for rec in sku_records:
+            sku: SKU | None = rec["sku"]  # type: ignore
+            bom_version: BOMVersion = rec["bom_version"]  # type: ignore
+            planned_qty: Decimal = rec["planned_qty"]  # type: ignore
 
             sku_data: dict[str, Any] = {
                 "sku": sku,
                 "bom_version": bom_version,
-                "planned_qty": sku_payload.planned_production_qty,
+                "planned_qty": planned_qty,
                 "items": [],
             }
 
             for bom_item in bom_version.items:
                 mat = bom_item.material
-                gross = bom_item.quantity_per_unit * sku_payload.planned_production_qty
+                gross = Decimal(bom_item.quantity_per_unit) * Decimal(planned_qty)
 
-                # Dynamic remaining calculation from ODS balance
-                remaining = self._inventory.get_balance(mat.id, ods_warehouse.id)
-                net = max(gross - remaining, Decimal("0.0000"))
+                # Dynamic remaining calculation apportioned across duplicate materials
+                mat_state = material_totals[mat.id]
+                apportioned_rem = min(gross, mat_state["remaining"])
+                mat_state["remaining"] -= apportioned_rem
+                net = max(gross - apportioned_rem, Decimal("0.0000"))
 
                 sku_data["items"].append(
                     {
                         "material": mat,
                         "gross_required_qty": gross,
-                        "remaining_from_previous_day": remaining,
+                        "remaining_from_previous_day": apportioned_rem,
                         "requested_qty": net,
                     }
                 )
@@ -250,6 +279,15 @@ class RequestService:
                         dispatched_by=dispatched_by,
                     )
 
+                    self._inventory.release_reservation(
+                        material_id=item.material_id,
+                        source_warehouse_id=request.rmpm_warehouse_id,
+                        quantity=item.dispatched_qty,
+                        reference_type="MATERIAL_REQUEST",
+                        reference_id=request.id,
+                        released_by=dispatched_by,
+                    )
+
         self._db.flush()
         logger.info("request_dispatched", request_id=request_id)
         return request
@@ -336,40 +374,60 @@ class RequestService:
     ) -> MaterialRequest:
         """Process RMPM approval: reserve inventory.
 
-        For each item in the approval payload:
-          - Set approved_qty on the MaterialRequestItem.
-          - Reserve the approved quantity from RMPM.
+        For each material in the approval payload:
+          - Distribute approved_qty across MaterialRequestItem lines greedily.
+          - Reserve the total approved quantity from RMPM.
 
-        If any approved_qty < requested_qty, status = PARTIALLY_APPROVED.
-        All-approved -> APPROVED.
+        If any approved_qty < requested_qty across the board, status = PARTIALLY_APPROVED.
         """
         request = self._get_request(request_id)
         _assert_transition(request.status, "APPROVED")
 
         request.rmpm_warehouse_id = rmpm_warehouse_id
 
-        approval_map = {
-            str(item.material_request_item_public_id): item.approved_qty
-            for item in payload.items
-        }
+        # Fetch materials to map public_id to internal id
+        mat_ids = {item.material_id for sku_line in request.skus for item in sku_line.items}
+        materials = self._db.scalars(select(Material).where(Material.id.in_(mat_ids))).all()
+        pub_to_id = {str(m.public_id): m.id for m in materials}
 
-        is_partial = False
-        reservations = []
+        # Map material_id -> total approved_qty
+        approval_map: dict[int, Decimal] = {}
+        for payload_item in payload.items:
+            mat_id = pub_to_id.get(str(payload_item.material_public_id))
+            if mat_id is not None:
+                approval_map[mat_id] = payload_item.approved_qty
+
+        # Group items by material_id
+        items_by_mat: dict[int, list[MaterialRequestItem]] = {}
         for sku_line in request.skus:
             for item in sku_line.items:
-                approved_qty = approval_map.get(str(item.public_id), Decimal("0"))
-                item.approved_qty = approved_qty
-                item.version += 1
-                item.updated_by = approved_by
+                if item.material_id is not None:
+                    items_by_mat.setdefault(item.material_id, []).append(item)
 
-                if approved_qty < item.requested_qty:
+        is_partial = False
+        reservations: list[tuple[int, Decimal]] = []
+
+        for mat_id, items in items_by_mat.items():
+            approved_remaining = approval_map.get(mat_id, Decimal("0"))
+            total_approved = approved_remaining
+
+            if total_approved > Decimal("0"):
+                reservations.append((mat_id, total_approved))
+
+            for req_item in items:
+                # Greedily allocate up to req_item.requested_qty
+                allocation = min(approved_remaining, req_item.requested_qty)
+                req_item.approved_qty = allocation
+                req_item.version += 1
+                req_item.updated_by = approved_by
+
+                approved_remaining -= allocation
+
+                if req_item.approved_qty < req_item.requested_qty:
                     is_partial = True
 
-                if approved_qty > Decimal("0"):
-                    reservations.append((item.material_id, approved_qty))
-
         # Sort reservations by material_id to acquire advisory locks consistently and prevent deadlocks
-        reservations.sort(key=lambda x: x[0])
+        reservations.sort(key=lambda x: x[0] or 0)
 
         for mat_id, qty in reservations:
             self._inventory.reserve(
@@ -404,9 +462,10 @@ class RequestService:
             select(MaterialRequest)
             .where(MaterialRequest.id == request_id)
             .options(
-                selectinload(MaterialRequest.skus).selectinload(
-                    MaterialRequestSKU.items
-                )
+                selectinload(MaterialRequest.skus)
+                .selectinload(MaterialRequestSKU.items)
+                .selectinload(MaterialRequestItem.material)
+                .selectinload(Material.material_type)
             )
         )
         if obj is None:

@@ -15,6 +15,7 @@ from io import BytesIO
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import DuplicateError, NotFoundError, ValidationError
@@ -327,41 +328,76 @@ class MasterService:
     # ------------------------------------------------------------------
     # BOM Excel Upload
     # ------------------------------------------------------------------
-
     def preview_bom_upload(self, file_bytes: bytes, filename: str) -> BOMUploadPreview:
-        """Parse and validate a BOM Excel file without committing any changes.
+        """Parse and validate a BOM Excel file without committing any changes."""
+        parsed_rows, global_errors, empty_sheets = self._parse_bom_excel(file_bytes, filename)
 
-        Validates:
-          - All required columns are present.
-          - Each SKU Code references an existing, non-deleted SKU.
-          - Each Material Code references an existing, non-deleted Material.
-          - Quantity Per Unit is a positive decimal.
 
-        Returns a row-by-row preview with status markers.
-        """
-        df, global_errors = self._parse_bom_excel(file_bytes, filename)
-        if global_errors:
-            return BOMUploadPreview(
-                total_rows=0,
-                valid_rows=0,
-                error_rows=0,
-                rows=[],
-                errors=global_errors,
-                skus_affected=[],
-            )
+        sku_codes = list({r["sku_code"] for r in parsed_rows})
+        mat_codes = list({r["material_code"] for r in parsed_rows})
+
+        skus_db = self._db.scalars(
+            select(SKU).where(SKU.code.in_(sku_codes)).where(SKU.deleted_at.is_(None))
+        ).all()
+        sku_map = {s.code: s for s in skus_db}
+
+        materials_db = self._db.scalars(
+            select(Material).where(Material.code.in_(mat_codes)).where(Material.deleted_at.is_(None))
+        ).all()
+        material_map = {m.code: m for m in materials_db}
 
         rows: list[BOMUploadRowResult] = []
         error_count = 0
         skus_affected: set[str] = set()
 
-        for idx, row in df.iterrows():
-            row_num = int(idx) + 2  # 1-indexed with header on row 1
-            sku_code = str(row["SKU Code"]).strip()
-            mat_code = str(row["Material Code"]).strip()
-            qty_raw = str(row["Quantity Per Unit"]).strip()
+        existing_skus = set()
+        new_skus = set()
+        existing_materials = set()
+        unknown_materials = set()
 
-            status = "valid"
-            message = ""
+        seen_blocks = set()
+        seen_sku_codes = set()
+        duplicate_sku_codes = set()
+
+        seen_sku_materials = set()
+        duplicate_material_codes = set()
+
+        for r in parsed_rows:
+            sku_code = r["sku_code"]
+            mat_code = r["material_code"]
+            qty_raw = r["quantity_per_unit"]
+            block_key = (r["sheet_name"], r["block_id"])
+
+            if block_key not in seen_blocks:
+                seen_blocks.add(block_key)
+                if sku_code in seen_sku_codes:
+                    duplicate_sku_codes.add(sku_code)
+                seen_sku_codes.add(sku_code)
+
+            if (sku_code, mat_code) in seen_sku_materials:
+                duplicate_material_codes.add(f"{mat_code} in {sku_code}")
+                status = "error"
+                message = f"Duplicate material '{mat_code}' in SKU '{sku_code}'."
+                error_count += 1
+            else:
+                seen_sku_materials.add((sku_code, mat_code))
+
+            status = status if 'status' in locals() and status == "error" else "valid"
+            message = message if 'message' in locals() and message != "" else ""
+
+            # SKU check
+            if sku_code in sku_map:
+                existing_skus.add(sku_code)
+            else:
+                new_skus.add(sku_code)
+
+            # Material check
+            if mat_code in material_map:
+                existing_materials.add(mat_code)
+            else:
+                unknown_materials.add(mat_code)
+                status = "unknown_material"
+                message = f"Unknown material '{mat_code}'. Must be created first."
 
             # Validate quantity
             try:
@@ -372,60 +408,16 @@ class MasterService:
                 status = "error"
                 message = f"Invalid quantity '{qty_raw}': must be a positive number."
                 error_count += 1
-                rows.append(
-                    BOMUploadRowResult(
-                        row_number=row_num,
-                        sku_code=sku_code,
-                        material_code=mat_code,
-                        quantity_per_unit=qty_raw,
-                        status=status,
-                        message=message,
-                    )
-                )
-                continue
-
-            # Validate SKU
-            sku = self._sku_repo.get_by_code(sku_code)
-            if sku is None:
-                status = "error"
-                message = f"SKU Code '{sku_code}' not found in master data."
-                error_count += 1
-                rows.append(
-                    BOMUploadRowResult(
-                        row_number=row_num,
-                        sku_code=sku_code,
-                        material_code=mat_code,
-                        quantity_per_unit=qty_raw,
-                        status=status,
-                        message=message,
-                    )
-                )
-                continue
-
-            # Validate Material
-            mat = self._material_repo.get_by_code(mat_code)
-            if mat is None:
-                status = "error"
-                message = f"Material Code '{mat_code}' not found in master data."
-                error_count += 1
-                rows.append(
-                    BOMUploadRowResult(
-                        row_number=row_num,
-                        sku_code=sku_code,
-                        material_code=mat_code,
-                        quantity_per_unit=qty_raw,
-                        status=status,
-                        message=message,
-                    )
-                )
-                continue
 
             skus_affected.add(sku_code)
             rows.append(
                 BOMUploadRowResult(
-                    row_number=row_num,
+                    sheet_name=r["sheet_name"],
+                    row_number=r["row_number"],
                     sku_code=sku_code,
                     material_code=mat_code,
+                    material_desc=r["material_desc"],
+                    uom=r["uom"],
                     quantity_per_unit=qty_raw,
                     status=status,
                     message=message,
@@ -434,66 +426,79 @@ class MasterService:
 
         return BOMUploadPreview(
             total_rows=len(rows),
-            valid_rows=len(rows) - error_count,
+            valid_rows=len(rows) - error_count - len([r for r in rows if r.status == 'unknown_material']),
             error_rows=error_count,
+            existing_skus=sorted(existing_skus),
+            new_skus=sorted(new_skus),
+            existing_materials=sorted(existing_materials),
+            unknown_materials=sorted(unknown_materials),
+            duplicate_material_codes=sorted(duplicate_material_codes),
+            duplicate_sku_codes=sorted(duplicate_sku_codes),
+            empty_sheets=empty_sheets,
             rows=rows,
-            errors=[],
+            errors=global_errors,
             skus_affected=sorted(skus_affected),
         )
 
     def commit_bom_upload(
         self, file_bytes: bytes, filename: str, *, created_by: int
     ) -> dict[str, int]:
-        """Parse, validate, and commit a BOM Excel file.
-
-        For each unique SKU in the file:
-          1. Deactivate all existing BOM versions for that SKU.
-          2. Create a new active BOMVersion (version_number incremented).
-          3. Create one BOMItem per row for this SKU.
-
-        Returns a dict with counts: {"skus_updated": N, "items_created": M}.
-
-        Raises:
-            ValidationError: If any rows contain errors (caller must preview first).
-        """
-        df, global_errors = self._parse_bom_excel(file_bytes, filename)
+        """Parse, validate, and commit a BOM Excel file."""
+        parsed_rows, global_errors, empty_sheets = self._parse_bom_excel(file_bytes, filename)
         if global_errors:
             raise ValidationError(global_errors[0])
 
-        # Group rows by SKU code
-        sku_rows: dict[str, list[tuple[str, Decimal]]] = {}
-        for _, row in df.iterrows():
-            sku_code = str(row["SKU Code"]).strip()
-            mat_code = str(row["Material Code"]).strip()
+        sku_codes = list({r["sku_code"] for r in parsed_rows})
+        mat_codes = list({r["material_code"] for r in parsed_rows})
+
+        skus_db = self._db.scalars(
+            select(SKU).where(SKU.code.in_(sku_codes)).where(SKU.deleted_at.is_(None))
+        ).all()
+        sku_map = {s.code: s for s in skus_db}
+
+        materials_db = self._db.scalars(
+            select(Material).where(Material.code.in_(mat_codes)).where(Material.deleted_at.is_(None))
+        ).all()
+        material_map = {m.code: m for m in materials_db}
+
+        # Check for unknown materials (rollback)
+        unknown_mats = [code for code in mat_codes if code not in material_map]
+        if unknown_mats:
+            raise ValidationError(f"Cannot commit. Unknown materials found: {', '.join(unknown_mats)}")
+
+        # Check quantities
+        for r in parsed_rows:
             try:
-                qty = Decimal(str(row["Quantity Per Unit"]).strip())
+                qty = Decimal(r["quantity_per_unit"])
                 if qty <= 0:
-                    raise ValueError()
-            except (InvalidOperation, ValueError) as exc:
-                raise ValidationError(
-                    f"Invalid quantity for material '{mat_code}' in SKU '{sku_code}'."
-                ) from exc
+                    raise ValueError
+            except ValueError as e:
+                raise ValidationError(f"Invalid quantity {r['quantity_per_unit']} for material {r['material_code']}.") from e
 
-            sku = self._sku_repo.get_by_code(sku_code)
-            if sku is None:
-                raise ValidationError(f"SKU Code '{sku_code}' not found.")
-            mat = self._material_repo.get_by_code(mat_code)
-            if mat is None:
-                raise ValidationError(f"Material Code '{mat_code}' not found.")
-
-            sku_rows.setdefault(sku_code, []).append((mat_code, qty))
-
-        items_created = 0
         skus_updated = 0
-        for sku_code, mat_qty_pairs in sku_rows.items():
-            sku = self._sku_repo.get_by_code(sku_code)
-            assert sku is not None
+        items_created = 0
 
-            # Deactivate existing BOM versions
+        # Create missing SKUs
+        for sku_code in sku_codes:
+            if sku_code not in sku_map:
+                # Find SKU Name
+                sku_name = next((r["sku_name"] for r in parsed_rows if r["sku_code"] == sku_code), sku_code)
+                new_sku = SKU(code=sku_code, name=sku_name, created_by=created_by)
+                self._db.add(new_sku)
+                self._db.flush()
+                sku_map[sku_code] = new_sku
+
+        # Group by SKU
+        sku_groups: dict[str, list[dict[str, Any]]] = {}
+        for r in parsed_rows:
+            sku_groups.setdefault(r["sku_code"], []).append(r)
+
+        for sku_code, mat_rows in sku_groups.items():
+            sku = sku_map[sku_code]
+
             self._bom_repo.deactivate_all_for_sku(sku.id)
-
-            # Create new version
             next_ver = self._bom_repo.get_next_version_number(sku.id)
+
             bom = BOMVersion(
                 sku_id=sku.id,
                 version_number=next_ver,
@@ -504,14 +509,14 @@ class MasterService:
             self._db.add(bom)
             self._db.flush()
 
-            for mat_code, qty in mat_qty_pairs:
-                mat = self._material_repo.get_by_code(mat_code)
+            for r in mat_rows:
+                mat = material_map.get(r["material_code"])
                 assert mat is not None
                 self._db.add(
                     BOMItem(
                         bom_version_id=bom.id,
                         material_id=mat.id,
-                        quantity_per_unit=qty,
+                        quantity_per_unit=Decimal(r["quantity_per_unit"]),
                         created_by=created_by,
                     )
                 )
@@ -542,33 +547,134 @@ class MasterService:
 
     def _parse_bom_excel(
         self, file_bytes: bytes, filename: str
-    ) -> tuple[pd.DataFrame, list[str]]:
-        """Parse Excel bytes into a DataFrame and return (df, global_errors).
+    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+        """Parse Excel bytes into a list of dictionaries.
 
-        Global errors (returned as second element) indicate file-level problems
-        that prevent row-level validation entirely.
+        Returns:
+            parsed_rows: list of dictionaries representing validly parsed data rows.
+            global_errors: list of file-level validation errors.
+            empty_sheets: list of sheet names that were skipped because they were empty.
         """
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if extension not in {"xlsx", "xls"}:
-            return pd.DataFrame(), [
-                f"Unsupported file type '.{extension}'. Use .xlsx or .xls."
-            ]
+            return [], [f"Unsupported file type '.{extension}'. Use .xlsx or .xls."], []
 
         try:
-            df = pd.read_excel(BytesIO(file_bytes), dtype=str)
+            # Read all sheets, without headers
+            sheets_dict = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=str)
         except Exception as exc:  # noqa: BLE001
-            return pd.DataFrame(), [f"Could not read Excel file: {exc}"]
+            return [], [f"Could not read Excel file: {exc}"], []
 
-        missing_cols = BOM_REQUIRED_COLUMNS - set(df.columns.str.strip())
-        if missing_cols:
-            cols = ", ".join(sorted(missing_cols))
-            return pd.DataFrame(), [f"Missing required column(s): {cols}"]
+        parsed_rows = []
+        global_errors = []
+        empty_sheets = []
 
-        # Normalise column names
-        df.columns = df.columns.str.strip()
-        df = df.dropna(how="all")
+        expected_headers = ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"]
 
-        if df.empty:
-            return pd.DataFrame(), ["The uploaded file contains no data rows."]
+        for sheet_name, df in sheets_dict.items():
+            df = df.dropna(how="all")  # Drop completely empty rows
+            if df.empty or len(df) < 3:
+                empty_sheets.append(sheet_name)
+                continue
 
-        return df, []
+            try:
+                current_sku_name = ""
+                current_sku_code = ""
+                sku_block_valid = False
+                block_id = 0
+
+                for i in range(len(df)):
+                    row = df.iloc[i]
+                    col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+
+                    # Skip completely blank lines or NaNs
+                    if not col0 or col0.lower() == "nan":
+                        continue
+
+                    # Detect Headers (indicates the start of the material list for a SKU block)
+                    if col0.lower() == expected_headers[0].lower():
+                        h1 = col0
+                        h2 = str(row[1]).strip() if df.shape[1] > 1 and pd.notna(row[1]) else ""
+                        h3 = str(row[2]).strip() if df.shape[1] > 2 and pd.notna(row[2]) else ""
+                        h4 = str(row[3]).strip() if df.shape[1] > 3 and pd.notna(row[3]) else ""
+                        actual_headers = [h1, h2, h3, h4]
+
+                        if not all(a.lower() == e.lower() for a, e in zip(actual_headers, expected_headers, strict=False)):
+                            global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1} has invalid headers. Expected: {expected_headers}")
+                            sku_block_valid = False
+                            continue
+
+                        block_id += 1
+
+                        # Look at the previous row for SKU Name and SKU Code
+                        if i == 0:
+                            global_errors.append(f"Sheet '{sheet_name}': Headers found on first row, missing SKU block definition.")
+                            sku_block_valid = False
+                            continue
+
+                        prev_row = df.iloc[i-1]
+                        current_sku_name = str(prev_row[0]).strip() if pd.notna(prev_row[0]) else ""
+                        current_sku_code = str(prev_row[1]).strip() if df.shape[1] > 1 and pd.notna(prev_row[1]) else ""
+
+                        if not current_sku_name or current_sku_name.lower() == "nan":
+                            global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1}: Missing SKU Name.")
+                            sku_block_valid = False
+                            continue
+
+                        if not current_sku_code or current_sku_code.lower() == "nan":
+                            global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1}: Missing SKU Code for SKU '{current_sku_name}'.")
+                            sku_block_valid = False
+                            continue
+
+                        # It's valid!
+                        sku_block_valid = True
+                        continue
+
+                    # If it's a material row
+                    if sku_block_valid:
+                        # We are inside a valid block, so this row is a material.
+                        mat_code = col0
+
+                        # Check if this row is actually a SKU definition without headers immediately following?
+                        # No, the next row would have headers, so it would just be skipped because sku_block_valid remains True until headers are found again... Wait.
+                        # What if there are blank rows separating the blocks, and then a SKU definition row?
+                        # df.dropna() removes blank rows.
+                        # So a SKU definition row will appear immediately after the last material of the previous block.
+                        # If we parse it as a material, it will be added as a material to the PREVIOUS block!
+                        # BUT wait! We detect headers at `i`. The row `i-1` is the SKU definition.
+                        # So when we process row `i-1` in the loop, we will currently treat it as a material for the previous block!
+                        # Let's fix this! We should not add it as a material if it's going to be a SKU definition.
+                        # How do we know it's a SKU definition? We don't, until we see the headers on the NEXT row.
+
+                        # Lookahead is better:
+                        next_row_col0 = ""
+                        if i + 1 < len(df):
+                            next_row = df.iloc[i+1]
+                            next_row_col0 = str(next_row[0]).strip() if pd.notna(next_row[0]) else ""
+
+                        if next_row_col0.lower() == expected_headers[0].lower():
+                            # This row is actually the SKU definition for the next block!
+                            # Do NOT process it as a material.
+                            sku_block_valid = False # Temporary suspend until headers process it.
+                            continue
+
+                        mat_desc = str(row[1]).strip() if df.shape[1] > 1 and pd.notna(row[1]) else ""
+                        qty_raw = str(row[2]).strip() if df.shape[1] > 2 and pd.notna(row[2]) else ""
+                        uom = str(row[3]).strip() if df.shape[1] > 3 and pd.notna(row[3]) else ""
+
+                        parsed_rows.append({
+                            "sheet_name": sheet_name,
+                            "row_number": int(df.index[i]) + 1,
+                            "sku_name": current_sku_name,
+                            "sku_code": current_sku_code,
+                            "material_code": mat_code,
+                            "material_desc": mat_desc,
+                            "quantity_per_unit": qty_raw,
+                            "uom": uom,
+                            "block_id": block_id
+                        })
+
+            except Exception as exc:
+                global_errors.append(f"Error parsing sheet '{sheet_name}': {exc}")
+
+        return parsed_rows, global_errors, empty_sheets

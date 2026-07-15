@@ -192,13 +192,16 @@ class BOMVersionOut(BaseModel):
 
 
 class BOMUploadRowResult(BaseModel):
-    """Validation result for a single row in the BOM upload file."""
+    """Validation result for a single material line in the BOM upload file."""
 
+    sheet_name: str
     row_number: int
     sku_code: str
     material_code: str
+    material_desc: str
+    uom: str
     quantity_per_unit: str
-    status: str = Field(description="'valid', 'error', or 'warning'")
+    status: str = Field(description="'valid', 'error', 'warning', or 'unknown_material'")
     message: str = ""
 
 
@@ -208,6 +211,16 @@ class BOMUploadPreview(BaseModel):
     total_rows: int
     valid_rows: int
     error_rows: int
+
+    # New reporting fields
+    existing_skus: list[str]
+    new_skus: list[str]
+    existing_materials: list[str]
+    unknown_materials: list[str]
+    duplicate_material_codes: list[str]
+    duplicate_sku_codes: list[str]
+    empty_sheets: list[str]
+
     rows: list[BOMUploadRowResult]
     errors: list[str]
     skus_affected: list[str] = Field(

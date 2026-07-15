@@ -29,8 +29,8 @@ async def validate_upload_file(file: UploadFile, db: Session) -> bytes:
             detail=f"Invalid file extension '.{extension}'. Allowed: {', '.join(allowed_exts)}"
         )
 
-    # 3. Read and check size
-    content = await file.read()
+    # 3. Read up to max_bytes + 1 to check size efficiently
+    content = await file.read(max_bytes + 1)
     if len(content) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -38,7 +38,7 @@ async def validate_upload_file(file: UploadFile, db: Session) -> bytes:
         )
     if len(content) > max_bytes:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large. Maximum allowed size is {max_bytes / (1024 * 1024):.1f} MB."
         )
 

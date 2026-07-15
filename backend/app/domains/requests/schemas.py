@@ -76,7 +76,7 @@ class RequestPreviewOut(BaseModel):
 class ApprovalItemInput(BaseModel):
     """Approved quantity for one MaterialRequestItem line."""
 
-    material_request_item_public_id: uuid.UUID
+    material_public_id: uuid.UUID
     approved_qty: Decimal = Field(ge=Decimal("0"), decimal_places=4)
 
 
@@ -99,6 +99,9 @@ class MaterialRequestItemOut(BaseModel):
 
     public_id: uuid.UUID
     material_id: int
+    material_public_id: uuid.UUID
+    material_name: str
+    material_code: str
     material_type: str = Field(
         default="RM",
         description="'RM' or 'PM' — resolved from the material's type at request time.",

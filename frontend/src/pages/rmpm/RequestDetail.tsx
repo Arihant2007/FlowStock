@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -37,18 +37,47 @@ export function RMPMRequestDetailPage() {
   const warehouses = whData?.data ?? []
   const rmpmWarehouses = warehouses.filter((w) => w.type === 'RMPM')
 
-  // Initialize approved quantities with requested quantities
+  const materialSummary = useMemo(() => {
+    if (!request) return []
+    const map = new Map<string, any>()
+    request.skus.forEach((sku: any) => {
+      sku.items.forEach((item: any) => {
+        const key = item.material_public_id
+        if (!map.has(key)) {
+          map.set(key, {
+            material_public_id: item.material_public_id,
+            material_name: item.material_name,
+            material_code: item.material_code,
+            material_type: item.material_type,
+            gross_required_qty: 0,
+            remaining_from_previous_day: parseFloat(item.remaining_from_previous_day),
+            requested_qty: 0,
+            approved_qty: 0,
+            dispatched_qty: 0,
+            received_qty: 0,
+          })
+        }
+        const m = map.get(key)!
+        m.gross_required_qty += parseFloat(item.gross_required_qty)
+        m.requested_qty += parseFloat(item.requested_qty)
+        if (item.approved_qty) m.approved_qty += parseFloat(item.approved_qty)
+        if (item.dispatched_qty) m.dispatched_qty += parseFloat(item.dispatched_qty)
+        if (item.received_qty) m.received_qty += parseFloat(item.received_qty)
+      })
+    })
+    return Array.from(map.values())
+  }, [request])
+
+  // Initialize approved quantities based on aggregated summary
   useEffect(() => {
-    if (request && Object.keys(approvedQtys).length === 0) {
+    if (materialSummary.length > 0 && Object.keys(approvedQtys).length === 0) {
       const initial: Record<string, string> = {}
-      request.skus.forEach((sku) => {
-        sku.items.forEach((item) => {
-          initial[item.public_id] = item.requested_qty
-        })
+      materialSummary.forEach((mat) => {
+        initial[mat.material_public_id] = mat.requested_qty.toString()
       })
       setApprovedQtys(initial)
     }
-  }, [request, approvedQtys])
+  }, [materialSummary, approvedQtys])
 
   const actionMutation = useMutation({
     mutationFn: async ({ action, payload }: { action: string; payload?: any }) => {
@@ -72,8 +101,8 @@ export function RMPMRequestDetailPage() {
       return
     }
 
-    const items = Object.entries(approvedQtys).map(([itemId, qty]) => ({
-      material_request_item_public_id: itemId,
+    const items = Object.entries(approvedQtys).map(([matId, qty]) => ({
+      material_public_id: matId,
       approved_qty: qty,
     }))
 
@@ -159,7 +188,46 @@ export function RMPMRequestDetailPage() {
         )}
       </Card>
 
-      {/* Requested Items */}
+      {/* Aggregated Material Summary */}
+      <Card>
+        <CardHeader className="bg-primary/5 pb-3">
+          <CardTitle className="text-base">Aggregated Material Summary</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0 px-0">
+          <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Dispatched', 'Received']}>
+            {materialSummary.map((mat) => (
+              <Tr key={mat.material_public_id}>
+                <Td>
+                  <div className="font-medium">{mat.material_name}</div>
+                  <div className="text-xs text-muted-foreground">{mat.material_code}</div>
+                </Td>
+                <Td><Badge label={mat.material_type} variant={mat.material_type.toLowerCase() as any} /></Td>
+                <Td className="font-mono text-sm">{formatQty(mat.gross_required_qty)}</Td>
+                <Td className="font-mono text-sm text-orange-600">{formatQty(mat.remaining_from_previous_day)}</Td>
+                <Td className="font-mono text-sm font-semibold">{formatQty(mat.requested_qty)}</Td>
+                <Td>
+                  {isPendingApprove ? (
+                    <div className="w-32">
+                      <Input
+                        type="number"
+                        step="0.0001"
+                        value={approvedQtys[mat.material_public_id] ?? ''}
+                        onChange={(e) => setApprovedQtys((p) => ({ ...p, [mat.material_public_id]: e.target.value }))}
+                      />
+                    </div>
+                  ) : (
+                    <span className="font-mono text-sm font-bold text-primary">{mat.approved_qty ? formatQty(mat.approved_qty) : '-'}</span>
+                  )}
+                </Td>
+                <Td className="font-mono text-sm text-blue-600">{mat.dispatched_qty ? formatQty(mat.dispatched_qty) : '-'}</Td>
+                <Td className="font-mono text-sm text-green-600">{mat.received_qty ? formatQty(mat.received_qty) : '-'}</Td>
+              </Tr>
+            ))}
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* SKU Breakdown (Requested Items) */}
       <div className="space-y-6">
         {request.skus.map((sku, index) => (
           <Card key={sku.public_id}>
@@ -170,23 +238,20 @@ export function RMPMRequestDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0 px-0">
-              <Table headers={['Type', 'Gross Req', 'Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Dispatched', 'Received']}>
+              <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', 'Approved', 'Dispatched', 'Received']}>
                 {sku.items.map((item) => (
                   <Tr key={item.public_id}>
+                    <Td>
+                      <div className="font-medium">{item.material_name}</div>
+                      <div className="text-xs text-muted-foreground">{item.material_code}</div>
+                    </Td>
                     <Td><Badge label={item.material_type} variant={item.material_type.toLowerCase() as any} /></Td>
                     <Td className="font-mono text-sm">{formatQty(item.gross_required_qty)}</Td>
                     <Td className="font-mono text-sm text-orange-600">{formatQty(item.remaining_from_previous_day)}</Td>
                     <Td className="font-mono text-sm font-semibold">{formatQty(item.requested_qty)}</Td>
                     <Td>
                       {isPendingApprove ? (
-                        <div className="w-32">
-                          <Input
-                            type="number"
-                            step="0.0001"
-                            value={approvedQtys[item.public_id] ?? ''}
-                            onChange={(e) => setApprovedQtys((p) => ({ ...p, [item.public_id]: e.target.value }))}
-                          />
-                        </div>
+                        <span className="text-xs text-muted-foreground italic">Auto-allocated</span>
                       ) : (
                         <span className="font-mono text-sm font-bold text-primary">{item.approved_qty ? formatQty(item.approved_qty) : '-'}</span>
                       )}

@@ -151,6 +151,37 @@ class InventoryService:
         )
         return tx
 
+    def release_reservation(
+        self,
+        *,
+        material_id: int,
+        source_warehouse_id: int,
+        quantity: Decimal,
+        reference_type: str,
+        reference_id: int,
+        released_by: int,
+    ) -> InventoryTransaction:
+        """Create a RESERVATION_RELEASE transaction to free up reserved inventory."""
+        tx = InventoryTransaction(
+            material_id=material_id,
+            source_warehouse_id=None,
+            destination_warehouse_id=source_warehouse_id,
+            transaction_type="RESERVATION_RELEASE",
+            quantity=quantity,
+            reference_type=reference_type,
+            reference_id=reference_id,
+            created_by=released_by,
+        )
+        self._db.add(tx)
+        self._db.flush()
+        logger.info(
+            "inventory_reservation_released",
+            material_id=material_id,
+            warehouse_id=source_warehouse_id,
+            quantity=str(quantity),
+        )
+        return tx
+
     def dispatch_transfer(
         self,
         *,
@@ -363,6 +394,24 @@ class InventoryService:
                 errors=global_errors,
             )
 
+        # Pre-fetch for bulk lookup to avoid N+1 queries
+        mat_codes = df.get("Material Code", pd.Series(dtype=str)).dropna().unique().tolist()
+        wh_names = df.get("Warehouse", pd.Series(dtype=str)).dropna().unique().tolist()
+
+        materials_db = self._db.scalars(
+            select(Material)
+            .where(Material.code.in_(mat_codes))
+            .where(Material.deleted_at.is_(None))
+        ).all()
+        material_map = {m.code: m for m in materials_db}
+
+        warehouses_db = self._db.scalars(
+            select(Warehouse)
+            .where(Warehouse.name.in_(wh_names))
+            .where(Warehouse.deleted_at.is_(None))
+        ).all()
+        warehouse_map = {w.name: w for w in warehouses_db}
+
         rows_out: list[dict[str, Any]] = []
         errors: list[str] = []
         warnings: list[str] = []
@@ -405,11 +454,7 @@ class InventoryService:
                 parsed_date = date_cls.today()
 
             # --- Material ---
-            material = self._db.scalar(
-                select(Material)
-                .where(Material.code == mat_code)
-                .where(Material.deleted_at.is_(None))
-            )
+            material = material_map.get(mat_code)
             if material is None:
                 row_status = "error"
                 row_messages.append(f"Material code '{mat_code}' not found.")
@@ -420,11 +465,7 @@ class InventoryService:
                 )
 
             # --- Warehouse ---
-            warehouse = self._db.scalar(
-                select(Warehouse)
-                .where(Warehouse.name == wh_name)
-                .where(Warehouse.deleted_at.is_(None))
-            )
+            warehouse = warehouse_map.get(wh_name)
             if warehouse is None:
                 row_status = "error"
                 row_messages.append(f"Warehouse '{wh_name}' not found.")
@@ -504,6 +545,23 @@ class InventoryService:
         valid_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
         errors_found: list[str] = []
 
+        mat_codes = df.get("Material Code", pd.Series(dtype=str)).dropna().unique().tolist()
+        wh_names = df.get("Warehouse", pd.Series(dtype=str)).dropna().unique().tolist()
+
+        materials_db = self._db.scalars(
+            select(Material)
+            .where(Material.code.in_(mat_codes))
+            .where(Material.deleted_at.is_(None))
+        ).all()
+        material_map = {m.code: m for m in materials_db}
+
+        warehouses_db = self._db.scalars(
+            select(Warehouse)
+            .where(Warehouse.name.in_(wh_names))
+            .where(Warehouse.deleted_at.is_(None))
+        ).all()
+        warehouse_map = {w.name: w for w in warehouses_db}
+
         for _, row in df.iterrows():
             mat_code = str(row.get("Material Code", "")).strip()
             qty_raw = str(row.get("Quantity", "")).strip()
@@ -534,11 +592,7 @@ class InventoryService:
                 errors_found.append(f"Cannot parse date '{date_raw}'.")
                 continue
 
-            material = self._db.scalar(
-                select(Material)
-                .where(Material.code == mat_code)
-                .where(Material.deleted_at.is_(None))
-            )
+            material = material_map.get(mat_code)
             if material is None:
                 errors_found.append(f"Material code '{mat_code}' not found.")
                 continue
@@ -548,11 +602,7 @@ class InventoryService:
                 )
                 continue
 
-            warehouse = self._db.scalar(
-                select(Warehouse)
-                .where(Warehouse.name == wh_name)
-                .where(Warehouse.deleted_at.is_(None))
-            )
+            warehouse = warehouse_map.get(wh_name)
             if warehouse is None:
                 errors_found.append(f"Warehouse '{wh_name}' not found.")
                 continue
