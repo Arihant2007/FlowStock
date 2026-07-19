@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { masterApi } from '@/api/master'
@@ -10,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Pagination } from '@/components/ui/pagination'
 import { ConfirmDialog } from '@/components/ui/alert-dialog'
 import { getErrorMessage, formatDate } from '@/lib/utils'
-import { Package, Trash2 } from 'lucide-react'
+import { Package, Trash2, Upload } from 'lucide-react'
 
 export function MaterialsPage() {
   const { hasPermission } = useAuth()
@@ -39,11 +40,20 @@ export function MaterialsPage() {
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Package className="h-6 w-6" /> Materials
-        </h1>
-        <p className="text-muted-foreground text-sm">Raw materials (RM) and packaging materials (PM)</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Package className="h-6 w-6" /> Materials
+          </h1>
+          <p className="text-muted-foreground text-sm">Raw materials (RM) and packaging materials (PM)</p>
+        </div>
+        {hasPermission('master:write') && (
+          <Link to="/master/material-upload">
+            <Button className="flex items-center gap-2">
+              <Upload className="h-4 w-4" /> Upload Excel
+            </Button>
+          </Link>
+        )}
       </div>
 
       <Card>

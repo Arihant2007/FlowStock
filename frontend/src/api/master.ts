@@ -6,6 +6,7 @@ import type {
   SKUOut,
   BOMVersionOut,
   BOMUploadPreview,
+  MaterialUploadPreview,
 } from '@/types/api'
 
 // ─── Warehouses ───────────────────────────────────────────────────────────────
@@ -75,6 +76,46 @@ export const masterApi = {
   deleteMaterial: async (id: string) => {
     const { data } = await client.delete<ApiResponse<{}>>(`/master/materials/${id}`)
     return data
+  },
+
+  downloadMaterialTemplate: async () => {
+    const response = await client.get('/master/materials/upload/template', {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
+  previewMaterialUpload: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await client.post<ApiResponse<MaterialUploadPreview>>(
+      '/master/materials/upload/preview',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return data
+  },
+
+  commitMaterialUpload: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await client.post<ApiResponse<{ created: number; updated: number; skipped: number }>>(
+      '/master/materials/upload/commit',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return data
+  },
+
+  extractMaterialsFromBOM: async (file: File, onlyUnknown: boolean = true) => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await client.post('/master/materials/extract-from-bom', form, {
+      params: { only_unknown: onlyUnknown },
+      responseType: 'blob',
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return response.data
   },
 
   // SKUs

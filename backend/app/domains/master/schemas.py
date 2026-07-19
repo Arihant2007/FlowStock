@@ -223,6 +223,44 @@ class BOMUploadPreview(BaseModel):
 
     rows: list[BOMUploadRowResult]
     errors: list[str]
+    warnings: list[str] = Field(default_factory=list)
     skus_affected: list[str] = Field(
         description="SKU codes that will receive a new BOM version."
     )
+
+
+# Material Master Upload
+# ---------------------------------------------------------------------------
+
+
+class MaterialUploadRowResult(BaseModel):
+    """Validation result for a single row in the Material Master upload file."""
+
+    row_number: int
+    material_code: str
+    material_name: str | None = None
+    uom: str | None = None
+    category: str | None = None
+    material_type: str | None = None
+    group: str | None = None
+    status: str = Field(description="'valid', 'error', 'duplicate', 'skipped'")
+    message: str = ""
+
+
+class MaterialUploadPreview(BaseModel):
+    """Preview response returned after Material Master Excel validation."""
+
+    total_rows: int
+    valid_rows: int
+    error_rows: int
+    skipped_rows_count: int = 0
+
+    new_materials: list[str]
+    updated_materials: list[str]
+    duplicate_material_codes: list[str]
+    invalid_rows: list[str] = Field(default_factory=list)
+    skipped_rows: list[str] = Field(default_factory=list)
+
+    rows: list[MaterialUploadRowResult]
+    errors: list[str]
+    warnings: list[str] = Field(default_factory=list)

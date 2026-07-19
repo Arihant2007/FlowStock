@@ -278,6 +278,109 @@ def delete_material(
 
 
 # ---------------------------------------------------------------------------
+# Material Master Upload endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/materials/upload/template", response_class=status.HTTP_200_OK)
+def download_material_template(
+    _: User = Depends(require_permission("master:read")),
+):
+    """Download the Material Master Excel template."""
+    import pandas as pd
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+
+    df = pd.DataFrame(columns=["Material Code", "Material Name", "UOM", "Category", "Material Type", "Group"])
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Material Master")
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=material_master_template.xlsx"
+    }
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
+@router.post(
+    "/materials/upload/preview", response_model=dict, status_code=status.HTTP_200_OK
+)
+async def preview_material_upload(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("master:write")),
+) -> dict:
+    """Upload a Material Master Excel file and receive a validation preview. No data is committed."""
+    content = await validate_upload_file(file, db)
+    preview = MasterService(db).preview_material_upload(
+        content, file.filename or "upload.xlsx"
+    )
+    return ok(
+        preview.model_dump(),
+        message="Material Master file parsed. Review errors before committing.",
+    )
+
+
+@router.post("/materials/upload/commit", response_model=dict, status_code=status.HTTP_200_OK)
+async def commit_material_upload(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("master:write")),
+) -> dict:
+    """Upload and commit a Material Master Excel file."""
+    content = await validate_upload_file(file, db)
+    # The entire request implicitly shares the single db session. 
+    # Calling db.commit() at the end will either commit all upserts, or throw an error.
+    result = MasterService(db).commit_material_upload(
+        content, file.filename or "upload.xlsx", created_by=current_user.id
+    )
+    db.commit()
+    return ok(
+        result,
+        message=f"Material Master upload committed. Created: {result['created']}, Updated: {result['updated']}, Skipped: {result['skipped']}.",
+    )
+
+
+@router.post("/materials/extract-from-bom", response_class=status.HTTP_200_OK)
+async def extract_materials_from_bom(
+    file: UploadFile,
+    only_unknown: bool = Query(True, description="If true, only extracts materials that don't exist in the DB"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("master:read")),
+):
+    """Parse a BOM Excel file and generate a Material Master template containing the extracted materials."""
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+    from fastapi import HTTPException
+    from app.core.errors import ValidationError
+
+    content = await validate_upload_file(file, db)
+    try:
+        excel_bytes = MasterService(db).extract_materials_from_bom(
+            content, file.filename or "bom.xlsx", only_unknown=only_unknown
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    output = BytesIO(excel_bytes)
+    output.seek(0)
+    
+    headers = {
+        "Content-Disposition": 'attachment; filename="extracted_materials.xlsx"'
+    }
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
+# ---------------------------------------------------------------------------
 # SKU endpoints
 # ---------------------------------------------------------------------------
 

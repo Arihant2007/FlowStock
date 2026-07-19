@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import DuplicateError, NotFoundError, ValidationError
 from app.core.logger import get_logger
@@ -43,6 +43,7 @@ from app.domains.master.schemas import (
     BOMUploadRowResult,
     MaterialCreate,
     MaterialUpdate,
+    MaterialUploadPreview,
     SKUCreate,
     SKUUpdate,
     WarehouseCreate,
@@ -330,7 +331,7 @@ class MasterService:
     # ------------------------------------------------------------------
     def preview_bom_upload(self, file_bytes: bytes, filename: str) -> BOMUploadPreview:
         """Parse and validate a BOM Excel file without committing any changes."""
-        parsed_rows, global_errors, empty_sheets = self._parse_bom_excel(file_bytes, filename)
+        parsed_rows, global_errors, empty_sheets, warnings = self._parse_bom_excel(file_bytes, filename)
 
 
         sku_codes = list({r["sku_code"] for r in parsed_rows})
@@ -396,8 +397,9 @@ class MasterService:
                 existing_materials.add(mat_code)
             else:
                 unknown_materials.add(mat_code)
-                status = "unknown_material"
+                status = "error"
                 message = f"Unknown material '{mat_code}'. Must be created first."
+                error_count += 1
 
             # Validate quantity
             try:
@@ -426,7 +428,7 @@ class MasterService:
 
         return BOMUploadPreview(
             total_rows=len(rows),
-            valid_rows=len(rows) - error_count - len([r for r in rows if r.status == 'unknown_material']),
+            valid_rows=len(rows) - error_count,
             error_rows=error_count,
             existing_skus=sorted(existing_skus),
             new_skus=sorted(new_skus),
@@ -437,6 +439,7 @@ class MasterService:
             empty_sheets=empty_sheets,
             rows=rows,
             errors=global_errors,
+            warnings=warnings,
             skus_affected=sorted(skus_affected),
         )
 
@@ -444,7 +447,7 @@ class MasterService:
         self, file_bytes: bytes, filename: str, *, created_by: int
     ) -> dict[str, int]:
         """Parse, validate, and commit a BOM Excel file."""
-        parsed_rows, global_errors, empty_sheets = self._parse_bom_excel(file_bytes, filename)
+        parsed_rows, global_errors, empty_sheets, _ = self._parse_bom_excel(file_bytes, filename)
         if global_errors:
             raise ValidationError(global_errors[0])
 
@@ -541,13 +544,138 @@ class MasterService:
         )
         return {"skus_updated": skus_updated, "items_created": items_created}
 
+    def extract_materials_from_bom(
+        self, file_bytes: bytes, filename: str, *, only_unknown: bool = True
+    ) -> bytes:
+        """Parse BOM Excel and generate a Material Master template for extracted materials."""
+        parsed_rows, global_errors, _, _ = self._parse_bom_excel(file_bytes, filename)
+        if global_errors:
+            raise ValidationError(global_errors[0])
+
+        unique_materials = {}
+        for r in parsed_rows:
+            code = r["material_code"]
+            desc = r["material_desc"]
+            uom = r["uom"]
+
+            if code not in unique_materials:
+                unique_materials[code] = {
+                    "Material Code": code,
+                    "Material Name": desc,
+                    "UOM": uom,
+                    "Category": "",
+                    "Material Type": "",
+                    "Group": "",
+                }
+            else:
+                # Consistency check
+                existing = unique_materials[code]
+                if existing["Material Name"] != desc or existing["UOM"] != uom:
+                    logger.warning(
+                        "inconsistent_material_in_bom",
+                        code=code,
+                        first_desc=existing["Material Name"],
+                        first_uom=existing["UOM"],
+                        new_desc=desc,
+                        new_uom=uom,
+                    )
+
+        # Retrieve existing materials from DB with relationships
+        existing_materials = self._db.scalars(
+            select(Material)
+            .options(
+                joinedload(Material.category),
+                joinedload(Material.material_type),
+                joinedload(Material.group)
+            )
+            .where(Material.code.in_(unique_materials.keys()))
+            .where(Material.deleted_at.is_(None))
+        ).all()
+        
+        existing_map = {m.code: m for m in existing_materials}
+        
+        if only_unknown:
+            unique_materials = {
+                k: v for k, v in unique_materials.items() if k not in existing_map
+            }
+
+        # Load configurable rules
+        import json
+        import os
+        rules_path = os.path.join(os.path.dirname(__file__), "..", "..", "core", "classification_rules.json")
+        try:
+            with open(rules_path, "r", encoding="utf-8") as f:
+                rules = json.load(f)
+        except Exception as e:
+            logger.error("failed_to_load_classification_rules", error=str(e))
+            rules = {"prefix_rules": [], "keyword_rules": [], "defaults": {"category": "Others", "type": "RM", "group": "Others"}}
+
+        defaults = rules.get("defaults", {"category": "Others", "type": "RM", "group": "Others"})
+
+        # Apply hierarchical classification
+        for code, mat_dict in unique_materials.items():
+            if code in existing_map:
+                m = existing_map[code]
+                mat_dict["Category"] = m.category.name if m.category else ""
+                mat_dict["Material Type"] = m.material_type.name if m.material_type else ""
+                mat_dict["Group"] = m.group.name if m.group else ""
+            else:
+                desc_lower = mat_dict["Material Name"].lower()
+                code_lower = code.lower()
+                
+                # Apply Prefix Rules
+                cat, mtype = None, None
+                for pr in rules.get("prefix_rules", []):
+                    if code_lower.startswith(pr.get("prefix", "").lower()):
+                        cat = pr.get("category")
+                        mtype = pr.get("type")
+                        break
+                
+                if cat is None:
+                    cat = defaults.get("category", "Others")
+                    mtype = defaults.get("type", "RM")
+                
+                # Apply Keyword Rules
+                grp = None
+                for kr in rules.get("keyword_rules", []):
+                    for kw in kr.get("keywords", []):
+                        if kw.lower() in desc_lower:
+                            grp = kr.get("group")
+                            break
+                    if grp:
+                        break
+                
+                if grp is None:
+                    grp = defaults.get("group", "Others")
+                
+                mat_dict["Category"] = cat
+                mat_dict["Material Type"] = mtype
+                mat_dict["Group"] = grp
+
+        df = pd.DataFrame(
+            list(unique_materials.values()),
+            columns=[
+                "Material Code",
+                "Material Name",
+                "UOM",
+                "Category",
+                "Material Type",
+                "Group",
+            ],
+        )
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Material Master")
+        
+        return output.getvalue()
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     def _parse_bom_excel(
         self, file_bytes: bytes, filename: str
-    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
         """Parse Excel bytes into a list of dictionaries.
 
         Returns:
@@ -557,17 +685,18 @@ class MasterService:
         """
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if extension not in {"xlsx", "xls"}:
-            return [], [f"Unsupported file type '.{extension}'. Use .xlsx or .xls."], []
+            return [], [f"Unsupported file type '.{extension}'. Use .xlsx or .xls."], [], []
 
         try:
             # Read all sheets, without headers
             sheets_dict = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=str)
         except Exception as exc:  # noqa: BLE001
-            return [], [f"Could not read Excel file: {exc}"], []
+            return [], [f"Could not read Excel file: {exc}"], [], []
 
         parsed_rows = []
         global_errors = []
         empty_sheets = []
+        warnings = []
 
         expected_headers = ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"]
 
@@ -586,95 +715,317 @@ class MasterService:
                 for i in range(len(df)):
                     row = df.iloc[i]
                     col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+                    col1 = str(row[1]).strip() if df.shape[1] > 1 and pd.notna(row[1]) else ""
+                    col2 = str(row[2]).strip() if df.shape[1] > 2 and pd.notna(row[2]) else ""
+                    col3 = str(row[3]).strip() if df.shape[1] > 3 and pd.notna(row[3]) else ""
 
-                    # Skip completely blank lines or NaNs
                     if not col0 or col0.lower() == "nan":
                         continue
 
-                    # Detect Headers (indicates the start of the material list for a SKU block)
+                    # Detect Headers
                     if col0.lower() == expected_headers[0].lower():
-                        h1 = col0
-                        h2 = str(row[1]).strip() if df.shape[1] > 1 and pd.notna(row[1]) else ""
-                        h3 = str(row[2]).strip() if df.shape[1] > 2 and pd.notna(row[2]) else ""
-                        h4 = str(row[3]).strip() if df.shape[1] > 3 and pd.notna(row[3]) else ""
-                        actual_headers = [h1, h2, h3, h4]
-
-                        if not all(a.lower() == e.lower() for a, e in zip(actual_headers, expected_headers, strict=False)):
+                        actual_headers = [col0, col1, col2, col3]
+                        if not all(a.lower() == e.lower() for a, e in zip(actual_headers, expected_headers, strict=False) if e):
                             global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1} has invalid headers. Expected: {expected_headers}")
                             sku_block_valid = False
-                            continue
+                        continue
 
+                    # Detect SKU Block Definition
+                    # A row is a SKU definition if it has no quantity (col2 is empty)
+                    if not col2 or col2.lower() == "nan":
+                        potential_sku_name = col0
+                        potential_sku_code = col1
+
+                        if not potential_sku_code or potential_sku_code.lower() == "nan":
+                            msg = f"Sheet '{sheet_name}', Row {df.index[i] + 1}: Missing FG Code for SKU '{potential_sku_name}'. Using FG Name as SKU Code."
+                            logger.warning(msg)
+                            warnings.append(msg)
+                            potential_sku_code = potential_sku_name
+
+                        current_sku_name = potential_sku_name
+                        current_sku_code = potential_sku_code
                         block_id += 1
-
-                        # Look at the previous row for SKU Name and SKU Code
-                        if i == 0:
-                            global_errors.append(f"Sheet '{sheet_name}': Headers found on first row, missing SKU block definition.")
-                            sku_block_valid = False
-                            continue
-
-                        prev_row = df.iloc[i-1]
-                        current_sku_name = str(prev_row[0]).strip() if pd.notna(prev_row[0]) else ""
-                        current_sku_code = str(prev_row[1]).strip() if df.shape[1] > 1 and pd.notna(prev_row[1]) else ""
-
-                        if not current_sku_name or current_sku_name.lower() == "nan":
-                            global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1}: Missing SKU Name.")
-                            sku_block_valid = False
-                            continue
-
-                        if not current_sku_code or current_sku_code.lower() == "nan":
-                            global_errors.append(f"Sheet '{sheet_name}', Row {df.index[i] + 1}: Missing SKU Code for SKU '{current_sku_name}'.")
-                            sku_block_valid = False
-                            continue
-
-                        # It's valid!
                         sku_block_valid = True
                         continue
 
-                    # If it's a material row
+                    # Parse Material Row
                     if sku_block_valid:
-                        # We are inside a valid block, so this row is a material.
-                        mat_code = col0
-
-                        # Check if this row is actually a SKU definition without headers immediately following?
-                        # No, the next row would have headers, so it would just be skipped because sku_block_valid remains True until headers are found again... Wait.
-                        # What if there are blank rows separating the blocks, and then a SKU definition row?
-                        # df.dropna() removes blank rows.
-                        # So a SKU definition row will appear immediately after the last material of the previous block.
-                        # If we parse it as a material, it will be added as a material to the PREVIOUS block!
-                        # BUT wait! We detect headers at `i`. The row `i-1` is the SKU definition.
-                        # So when we process row `i-1` in the loop, we will currently treat it as a material for the previous block!
-                        # Let's fix this! We should not add it as a material if it's going to be a SKU definition.
-                        # How do we know it's a SKU definition? We don't, until we see the headers on the NEXT row.
-
-                        # Lookahead is better:
-                        next_row_col0 = ""
-                        if i + 1 < len(df):
-                            next_row = df.iloc[i+1]
-                            next_row_col0 = str(next_row[0]).strip() if pd.notna(next_row[0]) else ""
-
-                        if next_row_col0.lower() == expected_headers[0].lower():
-                            # This row is actually the SKU definition for the next block!
-                            # Do NOT process it as a material.
-                            sku_block_valid = False # Temporary suspend until headers process it.
-                            continue
-
-                        mat_desc = str(row[1]).strip() if df.shape[1] > 1 and pd.notna(row[1]) else ""
-                        qty_raw = str(row[2]).strip() if df.shape[1] > 2 and pd.notna(row[2]) else ""
-                        uom = str(row[3]).strip() if df.shape[1] > 3 and pd.notna(row[3]) else ""
-
                         parsed_rows.append({
                             "sheet_name": sheet_name,
                             "row_number": int(df.index[i]) + 1,
                             "sku_name": current_sku_name,
                             "sku_code": current_sku_code,
-                            "material_code": mat_code,
-                            "material_desc": mat_desc,
-                            "quantity_per_unit": qty_raw,
-                            "uom": uom,
+                            "material_code": col0,
+                            "material_desc": col1,
+                            "quantity_per_unit": col2,
+                            "uom": col3,
                             "block_id": block_id
                         })
 
             except Exception as exc:
                 global_errors.append(f"Error parsing sheet '{sheet_name}': {exc}")
 
-        return parsed_rows, global_errors, empty_sheets
+        return parsed_rows, global_errors, empty_sheets, warnings
+
+    # ------------------------------------------------------------------
+    # Material Master Excel Upload
+    # ------------------------------------------------------------------
+
+    def preview_material_upload(self, file_bytes: bytes, filename: str) -> MaterialUploadPreview:
+        from app.domains.master.schemas import MaterialUploadPreview, MaterialUploadRowResult
+
+        parsed_rows, global_errors, empty_sheets, warnings = self._parse_material_excel(file_bytes, filename)
+
+        if global_errors:
+            return MaterialUploadPreview(
+                total_rows=0, valid_rows=0, error_rows=0, skipped_rows_count=0,
+                new_materials=[], updated_materials=[], duplicate_material_codes=[], invalid_rows=[], skipped_rows=[],
+                rows=[], errors=global_errors, warnings=warnings
+            )
+
+        # Load existing references
+        existing_mats = {m.code: m for m in self._db.scalars(select(Material).where(Material.deleted_at.is_(None))).all()}
+        from app.domains.master.models import MaterialCategory, MaterialType, MaterialGroup
+        existing_cats = {c.name.lower(): c for c in self._db.scalars(select(MaterialCategory)).all()}
+        existing_types = {t.name.lower(): t for c in self._db.scalars(select(MaterialType)).all() for t in [c]}
+        existing_groups = {g.name.lower(): g for c in self._db.scalars(select(MaterialGroup)).all() for g in [c]}
+
+        rows: list[MaterialUploadRowResult] = []
+        error_count = 0
+        skipped_count = 0
+        
+        new_materials = set()
+        updated_materials = set()
+        duplicate_codes_in_file = set()
+        invalid_rows = set()
+        skipped_rows = set()
+        
+        seen_codes = set()
+
+        for r in parsed_rows:
+            code = r["material_code"]
+            status = "valid"
+            message = ""
+
+            if code in seen_codes:
+                status = "duplicate"
+                message = f"Duplicate material code '{code}' in upload file."
+                duplicate_codes_in_file.add(code)
+                error_count += 1
+            else:
+                seen_codes.add(code)
+
+            if status != "duplicate":
+                # Validate foreign keys
+                if not r["category"]:
+                    status = "error"
+                    message = "Category is required."
+                elif r["category"].lower() not in existing_cats:
+                    status = "error"
+                    message = f"Category '{r['category']}' does not exist."
+                elif not r["material_type"]:
+                    status = "error"
+                    message = "Material Type is required."
+                elif r["material_type"].lower() not in existing_types:
+                    status = "error"
+                    message = f"Material Type '{r['material_type']}' does not exist."
+                elif not r["group"]:
+                    status = "error"
+                    message = "Group is required."
+                elif r["group"].lower() not in existing_groups:
+                    status = "error"
+                    message = f"Material Group '{r['group']}' does not exist."
+
+                if status == "error":
+                    invalid_rows.add(code)
+                    error_count += 1
+                else:
+                    if code in existing_mats:
+                        mat = existing_mats[code]
+                        # Check if anything changed
+                        cat_id = existing_cats[r["category"].lower()].id
+                        type_id = existing_types[r["material_type"].lower()].id
+                        group_id = existing_groups[r["group"].lower()].id if r["group"] else None
+
+                        if mat.name == r["material_name"] and mat.uom == r["uom"] and mat.category_id == cat_id and mat.type_id == type_id and mat.group_id == group_id:
+                            status = "skipped"
+                            message = "No changes detected."
+                            skipped_rows.add(code)
+                            skipped_count += 1
+                        else:
+                            updated_materials.add(code)
+                    else:
+                        new_materials.add(code)
+
+            rows.append(
+                MaterialUploadRowResult(
+                    row_number=r["row_number"],
+                    material_code=code,
+                    material_name=r["material_name"],
+                    uom=r["uom"],
+                    category=r["category"],
+                    material_type=r["material_type"],
+                    group=r["group"],
+                    status=status,
+                    message=message,
+                )
+            )
+
+        return MaterialUploadPreview(
+            total_rows=len(rows),
+            valid_rows=len(rows) - error_count - skipped_count,
+            error_rows=error_count,
+            skipped_rows_count=skipped_count,
+            new_materials=sorted(new_materials),
+            updated_materials=sorted(updated_materials),
+            duplicate_material_codes=sorted(duplicate_codes_in_file),
+            invalid_rows=sorted(invalid_rows),
+            skipped_rows=sorted(skipped_rows),
+            rows=rows,
+            errors=global_errors,
+            warnings=warnings,
+        )
+
+    def commit_material_upload(self, file_bytes: bytes, filename: str, *, created_by: int) -> dict[str, int]:
+        """Parse, validate, and commit a Material Master Excel file."""
+        parsed_rows, global_errors, _, _ = self._parse_material_excel(file_bytes, filename)
+        if global_errors:
+            raise ValidationError(global_errors[0])
+
+        existing_mats = {m.code: m for m in self._db.scalars(select(Material).where(Material.deleted_at.is_(None))).all()}
+        from app.domains.master.models import MaterialCategory, MaterialType, MaterialGroup
+        existing_cats = {c.name.lower(): c for c in self._db.scalars(select(MaterialCategory)).all()}
+        existing_types = {t.name.lower(): t for c in self._db.scalars(select(MaterialType)).all() for t in [c]}
+        existing_groups = {g.name.lower(): g for c in self._db.scalars(select(MaterialGroup)).all() for g in [c]}
+
+        created = 0
+        updated = 0
+        skipped = 0
+
+        # Run within nested transaction implicitly done by caller or here
+        # Validation
+        seen_codes = set()
+        for r in parsed_rows:
+            code = r["material_code"]
+            if code in seen_codes:
+                raise ValidationError(f"Duplicate material code '{code}' in upload file.")
+            seen_codes.add(code)
+
+            if not r["category"]:
+                raise ValidationError(f"Category is required (Row {r['row_number']}).")
+            if r["category"].lower() not in existing_cats:
+                raise ValidationError(f"Category '{r['category']}' does not exist (Row {r['row_number']}).")
+            
+            if not r["material_type"]:
+                raise ValidationError(f"Material Type is required (Row {r['row_number']}).")
+            if r["material_type"].lower() not in existing_types:
+                raise ValidationError(f"Material Type '{r['material_type']}' does not exist (Row {r['row_number']}).")
+            
+            if not r["group"]:
+                raise ValidationError(f"Group is required (Row {r['row_number']}).")
+            if r["group"].lower() not in existing_groups:
+                raise ValidationError(f"Material Group '{r['group']}' does not exist (Row {r['row_number']}).")
+
+        # Upsert
+        for r in parsed_rows:
+            code = r["material_code"]
+            cat_id = existing_cats[r["category"].lower()].id
+            type_id = existing_types[r["material_type"].lower()].id
+            group_id = existing_groups[r["group"].lower()].id if r["group"] else None
+
+            if code in existing_mats:
+                mat = existing_mats[code]
+                if mat.name != r["material_name"] or mat.uom != r["uom"] or mat.category_id != cat_id or mat.type_id != type_id or mat.group_id != group_id:
+                    mat.name = r["material_name"]
+                    mat.uom = r["uom"]
+                    mat.category_id = cat_id
+                    mat.type_id = type_id
+                    mat.group_id = group_id
+                    
+                    self._audit.log_action(
+                        action="MATERIAL_UPDATED",
+                        user_id=created_by,
+                        resource_type="Material",
+                        resource_id=mat.id,
+                        details={"source": "excel_upload", "updates": r},
+                    )
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                mat = Material(
+                    code=code,
+                    name=r["material_name"],
+                    uom=r["uom"],
+                    category_id=cat_id,
+                    type_id=type_id,
+                    group_id=group_id,
+                    created_by=created_by,
+                )
+                self._db.add(mat)
+                self._db.flush()
+                self._audit.log_action(
+                    action="MATERIAL_CREATED",
+                    user_id=created_by,
+                    resource_type="Material",
+                    resource_id=mat.id,
+                    details={"source": "excel_upload", "code": code},
+                )
+                created += 1
+
+        logger.info("material_upload_committed", created=created, updated=updated, skipped=skipped, created_by=created_by)
+        return {"created": created, "updated": updated, "skipped": skipped}
+
+    def _parse_material_excel(self, file_bytes: bytes, filename: str) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if extension not in {"xlsx", "xls"}:
+            return [], [f"Unsupported file type '.{extension}'. Use .xlsx or .xls."], [], []
+
+        try:
+            sheets_dict = pd.read_excel(BytesIO(file_bytes), sheet_name=None, dtype=str)
+        except Exception as exc:
+            return [], [f"Could not read Excel file: {exc}"], [], []
+
+        parsed_rows = []
+        global_errors = []
+        empty_sheets = []
+        warnings = []
+
+        expected_headers = ["Material Code", "Material Name", "UOM", "Category", "Material Type", "Group"]
+
+        for sheet_name, df in sheets_dict.items():
+            df = df.dropna(how="all")
+            if df.empty:
+                empty_sheets.append(sheet_name)
+                continue
+
+            actual_headers = list(df.columns)
+            if not all(h in actual_headers for h in expected_headers[:5]): # Group is optional if missing column
+                global_errors.append(f"Sheet '{sheet_name}' has invalid headers. Expected: {expected_headers}")
+                continue
+
+            for i in range(len(df)):
+                row = df.iloc[i]
+                col_code = str(row.get("Material Code", "")).strip()
+                if not col_code or col_code.lower() == "nan":
+                    continue
+                
+                def normalize(val: Any) -> str | None:
+                    if pd.isna(val) or val is None:
+                        return None
+                    v = str(val).strip()
+                    if not v or v.lower() == "nan":
+                        return None
+                    return v
+
+                parsed_rows.append({
+                    "row_number": int(df.index[i]) + 2, # +2 for header and 0-index
+                    "material_code": col_code,
+                    "material_name": normalize(row.get("Material Name", "")),
+                    "uom": normalize(row.get("UOM", "")),
+                    "category": normalize(row.get("Category", "")),
+                    "material_type": normalize(row.get("Material Type", "")),
+                    "group": normalize(row.get("Group", "")) if "Group" in row else None
+                })
+
+        return parsed_rows, global_errors, empty_sheets, warnings

@@ -1,0 +1,50 @@
+{
+  "prefix_rules": [
+    {
+      "prefix": "FR",
+      "category": "Raw Material",
+      "type": "RM"
+    },
+    {
+      "prefix": "FPS",
+      "category": "Packaging Material",
+      "type": "PM"
+    },
+    {
+      "prefix": "FFS",
+      "category": "Packaging Material",
+      "type": "PM"
+    }
+  ],
+  "keyword_rules": [
+    {
+      "keywords": ["Potato", "Salt", "Oil", "Spice"],
+      "group": "Ingredients"
+    },
+    {
+      "keywords": ["Lam", "Laminate"],
+      "group": "Laminates"
+    },
+    {
+      "keywords": ["Film"],
+      "group": "Films"
+    },
+    {
+      "keywords": ["Carton", "Box"],
+      "group": "Cartons"
+    },
+    {
+      "keywords": ["Pouch"],
+      "group": "Pouches"
+    },
+    {
+      "keywords": ["Label"],
+      "group": "Labels"
+    }
+  ],
+  "defaults": {
+    "category": "Others",
+    "type": "RM",
+    "group": "Others"
+  }
+}

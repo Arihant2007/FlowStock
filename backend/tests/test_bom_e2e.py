@@ -33,6 +33,9 @@ def create_mock_bom_excel() -> bytes:
         ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"],
         ["FR000649E", "POTATO-EXTERNAL", "3138.41", "KG"],
         ["FPSX02900", "LAM - PC FC CHILLI SPRINKLED", "115.122", "KG"],
+        ["FCC 50 RS", "FXC70051PB", "", ""],
+        ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"],
+        ["FR000649E", "POTATO-EXTERNAL", "2000", "KG"],
     ]
 
     # Sheet 2 has errors (missing SKU code, unknown material, duplicate material code)
@@ -58,12 +61,24 @@ def create_mock_bom_excel() -> bytes:
     # Sheet 4 is entirely empty
     s4: list[list[str]] = []
 
+    # Sheet 5: No repeated headers for subsequent blocks (Regression test)
+    s5 = [
+        ["FCC 10 RS", "FXC70010SL", "", ""],
+        ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"],
+        ["FR000649E", "POTATO-EXTERNAL", "3138.41", "KG"],
+        ["FR001373", "IODISED SALT - SUPER FINE", "16.061", "KG"],
+        ["FCC 20 RS", "FXC70020PA", "", ""],
+        ["FR000649E", "POTATO-EXTERNAL", "3138.41", "KG"],
+        ["FPSX02900", "LAM - PC FC CHILLI SPRINKLED", "115.122", "KG"],
+    ]
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         pd.DataFrame(s1).to_excel(writer, sheet_name="Sheet1", header=False, index=False)
         pd.DataFrame(s2).to_excel(writer, sheet_name="Sheet2", header=False, index=False)
         pd.DataFrame(s3).to_excel(writer, sheet_name="Sheet3", header=False, index=False)
         pd.DataFrame(s4).to_excel(writer, sheet_name="Sheet4", header=False, index=False)
+        pd.DataFrame(s5).to_excel(writer, sheet_name="Sheet5", header=False, index=False)
 
     return output.getvalue()
 
@@ -93,17 +108,38 @@ def test_bom_upload_parser(db):
     assert "Sheet4" in preview.empty_sheets
 
     # - Valid rows and errors
-    assert preview.error_rows == 1 # Duplicate material code triggers an error row
+    assert preview.error_rows == 6 # 1 from s2, 4 from s5 (duplicate materials for the same SKUs in s1), 1 unknown material
     # Wait, the duplicate material code, unknown material, missing SKU code!
 
-    # "Report block-level validation errors and continue parsing remaining SKU blocks instead of aborting the entire worksheet."
-    # We should have global errors for Sheet2 (missing SKU code) but it shouldn't abort the rest!
+    # We should NOT have global errors for Sheet2 (missing SKU code) because it falls back to Name.
+    assert len(preview.errors) == 0
 
     assert "FXC70010SL" in preview.new_skus
     assert "FXC70020PA" in preview.new_skus
+    assert "FXC70051PB" in preview.new_skus
+    assert "FCC 30 RS" in preview.new_skus  # This validates the fallback logic
     assert "UNKNOWN01" in preview.unknown_materials
     assert "FR000649E in FXC70040PA" in preview.duplicate_material_codes
     assert "FXC70020PA" in preview.duplicate_sku_codes
+
+    # Ensure material counts per SKU are correct
+    # Sheet1 has 3 SKUs. 1st has 2 items, 2nd has 2 items, 3rd has 1 item.
+    sheet1_rows = [r for r in preview.rows if r.sheet_name == "Sheet1"]
+    assert len(sheet1_rows) == 5
+    sku1_items = [r for r in sheet1_rows if r.sku_code == "FXC70010SL"]
+    sku2_items = [r for r in sheet1_rows if r.sku_code == "FXC70020PA"]
+    sku3_items = [r for r in sheet1_rows if r.sku_code == "FXC70051PB"]
+    assert len(sku1_items) == 2
+    assert len(sku2_items) == 2
+    assert len(sku3_items) == 1
+
+    # Ensure Sheet5 works even without repeated headers
+    sheet5_rows = [r for r in preview.rows if r.sheet_name == "Sheet5"]
+    assert len(sheet5_rows) == 4
+    sku1_items_s5 = [r for r in sheet5_rows if r.sku_code == "FXC70010SL"]
+    sku2_items_s5 = [r for r in sheet5_rows if r.sku_code == "FXC70020PA"]
+    assert len(sku1_items_s5) == 2
+    assert len(sku2_items_s5) == 2
 
     # 3. Commit
     # The commit should raise ValidationError because of the unknown material and other issues.

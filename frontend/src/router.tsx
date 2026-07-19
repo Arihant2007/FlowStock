@@ -8,6 +8,7 @@ import { LoginPage } from '@/pages/Login'
 import { DashboardPage } from '@/pages/Dashboard'
 import { WarehousesPage } from '@/pages/master/Warehouses'
 import { MaterialsPage } from '@/pages/master/Materials'
+import { MaterialUploadPage } from '@/pages/master/MaterialUpload'
 import { SKUsPage } from '@/pages/master/SKUs'
 import { BOMUploadPage } from '@/pages/master/BOMUpload'
 import { InventoryBalancesPage } from '@/pages/inventory/Balances'
@@ -54,6 +55,7 @@ export function AppRouter() {
           {/* Master */}
           <Route path="master/warehouses" element={<RequirePermission permission="master:read"><WarehousesPage /></RequirePermission>} />
           <Route path="master/materials" element={<RequirePermission permission="master:read"><MaterialsPage /></RequirePermission>} />
+          <Route path="master/material-upload" element={<RequirePermission permission="master:write"><MaterialUploadPage /></RequirePermission>} />
           <Route path="master/skus" element={<RequirePermission permission="master:read"><SKUsPage /></RequirePermission>} />
           <Route path="master/bom-upload" element={<RequirePermission permission="master:write"><BOMUploadPage /></RequirePermission>} />
 

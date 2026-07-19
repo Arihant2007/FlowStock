@@ -122,7 +122,38 @@ export interface BOMUploadPreview {
   error_rows: number
   rows: BOMUploadRowResult[]
   errors: string[]
+  warnings: string[]
   skus_affected: string[]
+  unknown_materials: string[]
+}
+
+// ─── Material Master Upload ───────────────────────────────────────────────────
+
+export interface MaterialUploadRowResult {
+  row_number: number
+  material_code: string
+  material_name: string
+  uom: string
+  category: string
+  material_type: string
+  group: string
+  status: 'valid' | 'error' | 'duplicate' | 'skipped'
+  message: string
+}
+
+export interface MaterialUploadPreview {
+  total_rows: number
+  valid_rows: number
+  error_rows: number
+  skipped_rows_count: number
+  new_materials: string[]
+  updated_materials: string[]
+  duplicate_material_codes: string[]
+  invalid_rows: string[]
+  skipped_rows: string[]
+  rows: MaterialUploadRowResult[]
+  errors: string[]
+  warnings: string[]
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────

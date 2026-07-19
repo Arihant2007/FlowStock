@@ -179,3 +179,19 @@ class MaterialRequestItem(AuditedModel):
         "MaterialRequestSKU", back_populates="items"
     )
     material: Mapped["Material"] = relationship("Material")
+
+    @property
+    def material_public_id(self):
+        return self.material.public_id if self.material else None
+
+    @property
+    def material_name(self):
+        return self.material.name if self.material else None
+
+    @property
+    def material_code(self):
+        return self.material.code if self.material else None
+
+    @property
+    def material_type(self):
+        return self.material.type.name if self.material and self.material.type else "RM"

@@ -43,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
     children: [
       { label: 'Warehouses', href: '/master/warehouses', icon: Warehouse },
       { label: 'Materials', href: '/master/materials', icon: Package },
+      { label: 'Material Upload', href: '/master/material-upload', icon: Upload },
       { label: 'SKUs', href: '/master/skus', icon: Layers },
       { label: 'BOM Upload', href: '/master/bom-upload', icon: Upload },
     ],
