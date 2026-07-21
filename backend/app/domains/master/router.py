@@ -282,7 +282,7 @@ def archive_material(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/materials/upload/template", response_class=status.HTTP_200_OK)
+@router.get("/materials/upload/template", status_code=status.HTTP_200_OK)
 def download_material_template(
     _: User = Depends(require_permission("master:read")),
 ):
@@ -346,7 +346,7 @@ async def commit_material_upload(
     )
 
 
-@router.post("/materials/extract-from-bom", response_class=status.HTTP_200_OK)
+@router.post("/materials/extract-from-bom", status_code=status.HTTP_200_OK)
 async def extract_materials_from_bom(
     file: UploadFile | None = File(None),
     session_id: str | None = Form(None),
