@@ -1,12 +1,10 @@
 FROM python:3.11-slim
 
-# Prevent Python from writing pyc files and buffering stdout
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies if any are needed for psycopg2 or others
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -14,15 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir uv==0.5.4
 
-# Install Python dependencies using uv
-COPY pyproject.toml .
-RUN uv pip install --system --no-cache-dir .
+# Copy dependency files first
+COPY pyproject.toml uv.lock ./
 
-# Copy application code
+# Create a dummy app directory so the build system doesn't fail, then install dependencies
+RUN mkdir app && touch app/__init__.py && uv pip install --system --no-cache-dir .
+
+# Copy the application
 COPY . .
 
-# Expose port
+# Install dependencies
+RUN uv pip install --system --no-cache-dir .
+
 EXPOSE 8000
 
-# Default command
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]

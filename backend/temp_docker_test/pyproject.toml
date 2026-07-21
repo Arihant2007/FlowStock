@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fmcg-wms-backend"
+version = "1.0.0"
+description = "FMCG Warehouse Management System - ODS & RMPM Inventory Transfer Backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.139.0",
+    "uvicorn[standard]==0.32.1",
+    "sqlalchemy==2.0.36",
+    "alembic==1.14.0",
+    "pydantic[email]==2.10.3",
+    "pydantic-settings==2.6.1",
+    "psycopg2-binary==2.9.10",
+    "python-jose[cryptography]==3.5.0",
+    "pwdlib[argon2]==0.2.1",
+    "slowapi==0.1.9",
+    "python-multipart==0.0.32",
+    "pandas==2.2.3",
+    "openpyxl==3.1.5",
+    "httpx==0.28.1",
+    "python-dateutil==2.9.0.post0",
+    "structlog==24.4.0",
+    "prometheus-fastapi-instrumentator==8.0.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "pytest-cov==6.0.0",
+    "factory-boy==3.3.1",
+    "httpx==0.28.1",
+    "ruff==0.8.4",
+    "black==24.10.0",
+    "isort==5.13.2",
+    "mypy==1.13.0",
+    "types-python-dateutil==2.9.0.20241206",
+    "types-passlib==1.7.7.20240819",
+]
+
+[tool.ruff]
+line-length = 88
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4"]
+ignore = ["E501", "B008"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing"
+markers = [
+    "postgres: mark test to run only when DATABASE_URL points to PostgreSQL",
+]
