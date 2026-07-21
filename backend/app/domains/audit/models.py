@@ -6,7 +6,7 @@ JSONB note:
   The application always targets PostgreSQL in production.
 """
 
-from sqlalchemy import JSON, BigInteger, Index, String
+from sqlalchemy import JSON, BigInteger, Index, String, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,3 +69,22 @@ class BusinessEventLog(BaseModel):
     reference_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payload: Mapped[dict] = mapped_column(_JsonColumn, nullable=False, default=dict)
     triggered_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class Notification(BaseModel):
+    """In-app notifications for users.
+    
+    Contains link and type for navigation and categorisation.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_id", "user_id"),
+        Index("ix_notifications_created_at", "created_at"),
+    )
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    type: Mapped[str] = mapped_column(String(50), nullable=False, default="INFO")

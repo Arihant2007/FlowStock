@@ -66,6 +66,14 @@ class RequestPreviewSKUOut(BaseModel):
 
 class RequestPreviewOut(BaseModel):
     skus: list[RequestPreviewSKUOut]
+    no_snapshot_found: bool = Field(
+        default=False,
+        description=(
+            "True when no previous-day ODS inventory snapshot exists. "
+            "In this case remaining inventory is treated as zero and full BOM "
+            "quantities are requested. The frontend should display an informational banner."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

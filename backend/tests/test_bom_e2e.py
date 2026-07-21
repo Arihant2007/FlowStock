@@ -101,7 +101,7 @@ def test_bom_upload_parser(db):
 
     # 2. Preview
     file_bytes = create_mock_bom_excel()
-    preview = svc.preview_bom_upload(file_bytes, "bom.xlsx")
+    preview = svc.preview_bom_upload(file_bytes, "bom.xlsx", session_id=None, current_user_id=1)
 
     # Verify Preview correctly reports:
     # - Empty worksheet skipped (no errors, but should process the rest)
@@ -144,7 +144,7 @@ def test_bom_upload_parser(db):
     # 3. Commit
     # The commit should raise ValidationError because of the unknown material and other issues.
     with pytest.raises(ValidationError):
-        svc.commit_bom_upload(file_bytes, "bom.xlsx", created_by=1)
+        svc.commit_bom_upload(session_id=preview.session_id, current_user_id=1)
 
     # Now let's create a valid file to verify Request creation
     valid_s1 = [
@@ -162,7 +162,8 @@ def test_bom_upload_parser(db):
         pd.DataFrame(valid_s1).to_excel(writer, header=False, index=False)
 
     valid_file_bytes = output2.getvalue()
-    svc.commit_bom_upload(valid_file_bytes, "bom_valid.xlsx", created_by=1)
+    valid_preview = svc.preview_bom_upload(valid_file_bytes, "bom_valid.xlsx", session_id=None, current_user_id=1)
+    svc.commit_bom_upload(session_id=valid_preview.session_id, current_user_id=1)
 
     # 4. Verify request creation:
     # Set up ODS Warehouse and Inventory for Request creation
@@ -231,3 +232,54 @@ def test_bom_upload_parser(db):
     s2 = next(i for i in items if i[0] == mat2.id and i[1] == Decimal("150.0000"))
     assert s2[2] == Decimal("0.0000")
     assert s2[3] == Decimal("150.0000")
+
+def test_archive_material_constraint(db):
+    svc = MasterService(db)
+    # Create materials and SKU
+    cat = MaterialCategory(name="Raw Material 2", public_id=uuid.uuid4(), created_by=1)
+    typ = MaterialType(name="Ingredient 2", public_id=uuid.uuid4(), created_by=1)
+    db.add(cat)
+    db.add(typ)
+    db.flush()
+
+    mat = Material(code="FR001234", name="TEST MATERIAL", category_id=cat.id, type_id=typ.id, uom="KG", created_by=1)
+    db.add(mat)
+    db.flush()
+
+    # Upload BOM to use this material
+    s1 = [
+        ["FCC 100 RS", "FXC70100SL", "", ""],
+        ["Material Code", "Material Description", "Quantity for 1 ton", "UOM"],
+        ["FR001234", "TEST MATERIAL", "100", "KG"],
+    ]
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        pd.DataFrame(s1).to_excel(writer, header=False, index=False)
+    file_bytes = output.getvalue()
+    
+    preview = svc.preview_bom_upload(file_bytes, "bom.xlsx", session_id=None, current_user_id=1)
+    svc.commit_bom_upload(session_id=preview.session_id, current_user_id=1)
+
+    # Attempt to archive material -> should fail
+    with pytest.raises(ValidationError, match="Cannot archive material. It is actively referenced in one or more active BOMs."):
+        svc.archive_material(str(mat.public_id), deleted_by=1)
+
+    # ---------------------------------------------------------
+    # Test Dashboard and History using the populated data
+    # ---------------------------------------------------------
+    stats = svc.get_dashboard_stats()
+    assert stats["total_materials"] > 0
+    assert stats["total_skus"] > 0
+    assert stats["total_bom_versions"] > 0
+    assert stats["total_bom_items"] > 0
+    assert stats["last_import_at"] is not None
+
+    history = svc.list_bom_sessions()
+    assert len(history) > 0
+    
+    # Check that commit summary is populated
+    committed = [h for h in history if h.status == "COMMITTED"]
+    assert len(committed) > 0
+    assert committed[0].import_results is not None
+    assert "skus_created" in committed[0].import_results
+    assert "duration_seconds" in committed[0].import_results

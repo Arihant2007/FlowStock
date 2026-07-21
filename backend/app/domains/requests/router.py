@@ -95,30 +95,22 @@ def list_requests(
 
 @router.get("/{request_id}", response_model=dict, status_code=status.HTTP_200_OK)
 def get_request(
-    request_id: uuid.UUID,
+    request_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("requests:read")),
 ) -> dict:
-    """Get full details of a material request by public ID."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    """Get full details of a material request by public ID or request number."""
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+        
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 
     loaded = RequestService(db)._get_request(req.id)
-    # The output schema expects material fields per item.
-    # They are not stored directly in MaterialRequestItem, so we augment the ORM objects.
-    for sku in loaded.skus:
-        for item in sku.items:
-            if hasattr(item, "material") and item.material:
-                item.material_public_id = item.material.public_id  # type: ignore[attr-defined]
-                item.material_name = item.material.name            # type: ignore[attr-defined]
-                item.material_code = item.material.code            # type: ignore[attr-defined]
-                item.material_type = item.material.material_type.name if item.material.material_type else "RM"  # type: ignore[attr-defined]
-            else:
-                item.material_type = "RM"  # type: ignore[attr-defined]
-
     return ok(MaterialRequestOut.model_validate(loaded).model_dump())
 
 
@@ -131,15 +123,19 @@ def get_request(
     "/{request_id}/approve", response_model=dict, status_code=status.HTTP_200_OK
 )
 def approve_request(
-    request_id: uuid.UUID,
+    request_id: str,
     payload: ApproveRequestPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("requests:approve")),
 ) -> dict:
     """Approve a request and execute inventory reservation."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 
@@ -164,14 +160,18 @@ def approve_request(
     "/{request_id}/dispatch", response_model=dict, status_code=status.HTTP_200_OK
 )
 def dispatch_request(
-    request_id: uuid.UUID,
+    request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("requests:approve")),
 ) -> dict:
     """Mark a request as DISPATCHED."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 
@@ -184,14 +184,18 @@ def dispatch_request(
     "/{request_id}/receive", response_model=dict, status_code=status.HTTP_200_OK
 )
 def receive_request(
-    request_id: uuid.UUID,
+    request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("requests:create")),
 ) -> dict:
     """Mark a request as RECEIVED (by ODS)."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 
@@ -202,14 +206,18 @@ def receive_request(
 
 @router.post("/{request_id}/close", response_model=dict, status_code=status.HTTP_200_OK)
 def close_request(
-    request_id: uuid.UUID,
+    request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("requests:create")),
 ) -> dict:
     """Mark a request as CLOSED."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 
@@ -222,14 +230,18 @@ def close_request(
     "/{request_id}/reject", response_model=dict, status_code=status.HTTP_200_OK
 )
 def reject_request(
-    request_id: uuid.UUID,
+    request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("requests:approve")),
 ) -> dict:
     """Mark a request as REJECTED."""
-    req = db.scalar(
-        select(MaterialRequest).where(MaterialRequest.public_id == request_id)
-    )
+    req = None
+    try:
+        req_uuid = uuid.UUID(request_id)
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.public_id == req_uuid))
+    except ValueError:
+        req = db.scalar(select(MaterialRequest).where(MaterialRequest.request_number == request_id))
+
     if not req:
         raise NotFoundError(f"Request {request_id} not found.")
 

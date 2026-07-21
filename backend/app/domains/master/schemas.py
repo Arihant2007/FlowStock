@@ -9,7 +9,7 @@ Provides request/response models for:
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -153,6 +153,20 @@ class SKUOut(BaseModel):
     updated_at: datetime | None
 
 
+class SKUOptionOut(BaseModel):
+    """Lightweight SKU projection for dropdown / autocomplete use.
+
+    Returns only the three fields needed to render a select option —
+    omits description, timestamps, and audit columns to keep the payload small.
+    """
+
+    model_config = {"from_attributes": True}
+
+    public_id: uuid.UUID
+    code: str
+    name: str
+
+
 # ---------------------------------------------------------------------------
 # BOM
 # ---------------------------------------------------------------------------
@@ -201,7 +215,7 @@ class BOMUploadRowResult(BaseModel):
     material_desc: str
     uom: str
     quantity_per_unit: str
-    status: str = Field(description="'valid', 'error', 'warning', or 'unknown_material'")
+    status: str = Field(description="'valid', 'error', 'warning', or 'pending_material'")
     message: str = ""
 
 
@@ -211,6 +225,7 @@ class BOMUploadPreview(BaseModel):
     total_rows: int
     valid_rows: int
     error_rows: int
+    pending_rows: int = 0
 
     # New reporting fields
     existing_skus: list[str]
@@ -227,6 +242,41 @@ class BOMUploadPreview(BaseModel):
     skus_affected: list[str] = Field(
         description="SKU codes that will receive a new BOM version."
     )
+    session_id: str | None = None
+    session_status: str | None = None
+
+
+class BOMUploadSessionOut(BaseModel):
+    """Serialized BOM upload session history."""
+
+    public_id: uuid.UUID
+    filename: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+    import_results: dict | None = None
+    warnings: list[str] | None = None
+
+
+class InventoryUploadStats(BaseModel):
+    snapshot_date: date | None = None
+    upload_time: datetime | None = None
+    uploaded_by: str | None = None
+    warehouse_name: str | None = None
+    version: int | None = None
+    total_materials: int = 0
+    matched_count: int = 0
+    variance_count: int = 0
+
+class DashboardStatsOut(BaseModel):
+    """Top-level dashboard statistics."""
+
+    total_materials: int
+    total_skus: int
+    total_bom_versions: int
+    total_bom_items: int
+    last_import_at: datetime | None = None
+    inventory_upload: InventoryUploadStats | None = None
 
 
 # Material Master Upload

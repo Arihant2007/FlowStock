@@ -40,13 +40,9 @@ if TYPE_CHECKING:
     from app.domains.master.models import SKU, Material
 
 REQUEST_STATUSES = (
+    "DRAFT",
     "SUBMITTED",
-    "RESERVED",
     "APPROVED",
-    "PARTIALLY_APPROVED",
-    "DISPATCHED",
-    "RECEIVED",
-    "CLOSED",
     "REJECTED",
 )
 STATUS_CHECK = f"status IN ({', '.join(repr(s) for s in REQUEST_STATUSES)})"
@@ -63,8 +59,10 @@ class MaterialRequest(AuditedModel):
     )
 
     request_date: Mapped[date] = mapped_column(Date, nullable=False)
+    request_number: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="DRAFT")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    review_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     approved_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     ods_warehouse_id: Mapped[int] = mapped_column(
@@ -77,6 +75,32 @@ class MaterialRequest(AuditedModel):
     skus: Mapped[list["MaterialRequestSKU"]] = relationship(
         "MaterialRequestSKU", back_populates="request", cascade="all, delete-orphan"
     )
+    history: Mapped[list["MaterialRequestHistory"]] = relationship(
+        "MaterialRequestHistory", back_populates="request", cascade="all, delete-orphan"
+    )
+
+class MaterialRequestHistory(AuditedModel):
+    """Audit log of status transitions and review actions for a request."""
+
+    __tablename__ = "material_request_history"
+    __table_args__ = (
+        Index("ix_mat_req_history_req_id", "request_id"),
+    )
+
+    request_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("material_requests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    previous_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    new_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    review_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    request: Mapped["MaterialRequest"] = relationship("MaterialRequest", back_populates="history")
 
 
 class MaterialRequestSKU(AuditedModel):

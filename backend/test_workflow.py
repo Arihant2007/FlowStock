@@ -23,30 +23,11 @@ def reset_db(db):
     db.execute(text("DELETE FROM materials"))
     db.execute(text("DELETE FROM material_groups"))
     db.execute(text("DELETE FROM skus"))
+    db.execute(text("DELETE FROM material_types"))
+    db.execute(text("DELETE FROM material_categories"))
     db.commit()
-    # ensure categories and types exist
-    cat = db.query(MaterialCategory).filter_by(name='Raw Material').first()
-    if not cat:
-        db.add(MaterialCategory(name='Raw Material', created_by=1))
-        db.add(MaterialCategory(name='Packaging Material', created_by=1))
-        db.add(MaterialCategory(name='Others', created_by=1))
-    
-    typ = db.query(MaterialType).filter_by(name='RM').first()
-    if not typ:
-        db.add(MaterialType(name='RM', created_by=1))
-        db.add(MaterialType(name='PM', created_by=1))
-    
-    grp = db.query(MaterialGroup).filter_by(name='Ingredients').first()
-    if not grp:
-        db.add(MaterialGroup(name='Ingredients', created_by=1))
-        db.add(MaterialGroup(name='Laminates', created_by=1))
-        db.add(MaterialGroup(name='Films', created_by=1))
-        db.add(MaterialGroup(name='Cartons', created_by=1))
-        db.add(MaterialGroup(name='Pouches', created_by=1))
-        db.add(MaterialGroup(name='Labels', created_by=1))
-        db.add(MaterialGroup(name='Others', created_by=1))
-        
-    db.commit()
+    from seed import seed
+    seed(db)
     
     wh_ods = db.query(Warehouse).filter_by(type='ODS').first()
     if not wh_ods:

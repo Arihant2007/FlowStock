@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 120
     refresh_token_expire_days: int = 7
+    snapshot_edit_window_days: int = 1
 
     # --- Application ---
     environment: str = "development"

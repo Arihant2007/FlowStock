@@ -43,9 +43,10 @@ const NAV_ITEMS: NavItem[] = [
     children: [
       { label: 'Warehouses', href: '/master/warehouses', icon: Warehouse },
       { label: 'Materials', href: '/master/materials', icon: Package },
-      { label: 'Material Upload', href: '/master/material-upload', icon: Upload },
+      { label: 'Material Upload', href: '/master/material-upload', icon: Upload, permission: 'master:write' },
       { label: 'SKUs', href: '/master/skus', icon: Layers },
-      { label: 'BOM Upload', href: '/master/bom-upload', icon: Upload },
+      { label: 'Import History', href: '/master/boms', icon: History },
+      { label: 'BOM Upload', href: '/master/bom-upload', icon: Upload, permission: 'master:write' },
     ],
   },
   {
@@ -56,6 +57,7 @@ const NAV_ITEMS: NavItem[] = [
       { label: 'Balances', href: '/inventory/balances', icon: Scale },
       { label: 'Upload Snapshot', href: '/inventory/upload', icon: Upload, permission: 'inventory:upload' },
       { label: 'EOD Count', href: '/inventory/eod-count', icon: ClipboardList, permission: 'inventory:adjust' },
+      { label: 'Variance Report', href: '/inventory/variance', icon: Scale },
       { label: 'Transactions', href: '/inventory/transactions', icon: History },
     ],
   },

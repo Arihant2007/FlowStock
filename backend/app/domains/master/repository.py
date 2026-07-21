@@ -180,6 +180,29 @@ class SKURepository(BaseRepository[SKU]):
             select(SKU).where(SKU.code == code).where(SKU.deleted_at.is_(None))
         )
 
+    def list_all(
+        self, *, page: int = 1, page_size: int = 20
+    ) -> tuple[list[SKU], int]:
+        """Return paginated SKUs ordered by code for consistent pagination."""
+        from sqlalchemy import func
+
+        total: int = (
+            self.db.scalar(
+                select(func.count(SKU.id)).where(SKU.deleted_at.is_(None))
+            )
+            or 0
+        )
+        rows = list(
+            self.db.scalars(
+                select(SKU)
+                .where(SKU.deleted_at.is_(None))
+                .order_by(SKU.code)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return rows, total
+
 
 # ---------------------------------------------------------------------------
 # BOM

@@ -9,6 +9,7 @@ Design notes:
 """
 
 from decimal import Decimal
+from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
@@ -19,8 +20,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    DateTime,
+    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+import enum
 
 from app.infrastructure.base_model import AuditedModel
 
@@ -199,3 +203,31 @@ class BOMItem(AuditedModel):
         "BOMVersion", back_populates="items"
     )
     material: Mapped["Material"] = relationship("Material", back_populates="bom_items")
+
+
+class BOMUploadSessionStatus(str, enum.Enum):
+    UPLOADED = "UPLOADED"
+    WAITING_FOR_MATERIALS = "WAITING_FOR_MATERIALS"
+    READY_TO_COMMIT = "READY_TO_COMMIT"
+    COMMITTED = "COMMITTED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+
+
+class BOMUploadSession(AuditedModel):
+    """A persistent staging session for a BOM Excel upload."""
+
+    __tablename__ = "bom_upload_sessions"
+
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[BOMUploadSessionStatus] = mapped_column(
+        String(50), nullable=False, default=BOMUploadSessionStatus.UPLOADED
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    import_results: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+

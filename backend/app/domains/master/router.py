@@ -29,7 +29,7 @@ Endpoints:
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Query, UploadFile, status, Form, File
 from sqlalchemy.orm import Session
 
 from app.core.responses import ok, paginate
@@ -263,18 +263,18 @@ def update_material(
     return ok(MaterialOut.model_validate(mat).model_dump(), message="Material updated.")
 
 
-@router.delete(
-    "/materials/{material_id}", response_model=dict, status_code=status.HTTP_200_OK
+@router.post(
+    "/materials/{material_id}/archive", response_model=dict, status_code=status.HTTP_200_OK
 )
-def delete_material(
+def archive_material(
     material_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("master:write")),
 ) -> dict:
-    """Soft-delete a material."""
-    MasterService(db).delete_material(str(material_id), deleted_by=current_user.id)
+    """Soft-delete (archive) a material."""
+    MasterService(db).archive_material(str(material_id), deleted_by=current_user.id)
     db.commit()
-    return ok({}, message="Material deleted.")
+    return ok({}, message="Material archived.")
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +348,8 @@ async def commit_material_upload(
 
 @router.post("/materials/extract-from-bom", response_class=status.HTTP_200_OK)
 async def extract_materials_from_bom(
-    file: UploadFile,
+    file: UploadFile | None = File(None),
+    session_id: str | None = Form(None),
     only_unknown: bool = Query(True, description="If true, only extracts materials that don't exist in the DB"),
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("master:read")),
@@ -359,10 +360,18 @@ async def extract_materials_from_bom(
     from fastapi import HTTPException
     from app.core.errors import ValidationError
 
-    content = await validate_upload_file(file, db)
+    content = None
+    filename = None
+    if file:
+        content = await validate_upload_file(file, db)
+        filename = file.filename or "bom.xlsx"
+
+    if not content and not session_id:
+        raise HTTPException(status_code=400, detail="Either file or session_id must be provided.")
+
     try:
         excel_bytes = MasterService(db).extract_materials_from_bom(
-            content, file.filename or "bom.xlsx", only_unknown=only_unknown
+            file_bytes=content, filename=filename, session_id=session_id, only_unknown=only_unknown
         )
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -388,7 +397,7 @@ async def extract_materials_from_bom(
 @router.get("/skus", response_model=dict, status_code=status.HTTP_200_OK)
 def list_skus(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=5000),
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("master:read")),
 ) -> dict:
@@ -412,6 +421,22 @@ def create_sku(
     sku = MasterService(db).create_sku(payload, created_by=current_user.id)
     db.commit()
     return ok(SKUOut.model_validate(sku).model_dump(), message="SKU created.")
+
+
+@router.get("/skus/options", response_model=dict, status_code=status.HTTP_200_OK)
+def list_sku_options(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("master:read")),
+) -> dict:
+    """Return all non-deleted SKUs as a lightweight options list (public_id, code, name only).
+
+    Designed for dropdowns and autocompletes — omits description, timestamps, and
+    pagination overhead. Always returns the full set; callers should not paginate.
+    """
+    from app.domains.master.schemas import SKUOptionOut
+
+    rows, _ = MasterService(db).list_skus(page=1, page_size=5000)
+    return ok([SKUOptionOut.model_validate(r).model_dump() for r in rows])
 
 
 @router.get("/skus/{sku_id}", response_model=dict, status_code=status.HTTP_200_OK)
@@ -470,18 +495,25 @@ def get_active_bom(
     "/boms/upload/preview", response_model=dict, status_code=status.HTTP_200_OK
 )
 async def preview_bom_upload(
-    file: UploadFile,
+    file: UploadFile | None = File(None),
+    session_id: str | None = Form(None),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("master:write")),
+    current_user: User = Depends(require_permission("master:write")),
 ) -> dict:
-    """Upload a BOM Excel file and receive a validation preview. No data is committed.
+    """Upload or resume a BOM Excel file preview."""
+    content = None
+    filename = None
+    if file:
+        content = await validate_upload_file(file, db)
+        filename = file.filename or "upload.xlsx"
 
-    Required columns: SKU Code, Material Code, Quantity Per Unit
-    """
-    content = await validate_upload_file(file, db)
     preview = MasterService(db).preview_bom_upload(
-        content, file.filename or "upload.xlsx"
+        file_bytes=content,
+        filename=filename,
+        session_id=session_id,
+        current_user_id=current_user.id,
     )
+    db.commit()
     return ok(
         preview.model_dump(),
         message="BOM file parsed. Review errors before committing.",
@@ -490,20 +522,49 @@ async def preview_bom_upload(
 
 @router.post("/boms/upload/commit", response_model=dict, status_code=status.HTTP_200_OK)
 async def commit_bom_upload(
-    file: UploadFile,
+    session_id: str = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("master:write")),
 ) -> dict:
-    """Upload and commit a BOM Excel file. Creates a new immutable BOM version per SKU.
-
-    Existing active BOM versions for the affected SKUs will be deactivated.
-    """
-    content = await validate_upload_file(file, db)
+    """Commit a staged BOM Excel file using its session ID."""
     result = MasterService(db).commit_bom_upload(
-        content, file.filename or "upload.xlsx", created_by=current_user.id
+        session_id=session_id, current_user_id=current_user.id
     )
     db.commit()
     return ok(
         result,
-        message=f"BOM upload committed. {result['skus_updated']} SKU(s) updated.",
+        message="BOM import completed successfully.",
     )
+
+@router.delete("/boms/upload/session/{session_id}", response_model=dict, status_code=status.HTTP_200_OK)
+def cancel_bom_upload(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("master:write")),
+) -> dict:
+    MasterService(db).cancel_bom_upload(session_id, current_user.id)
+    db.commit()
+    return ok({}, message="BOM upload cancelled.")
+
+
+@router.get("/boms/uploads/history", response_model=dict, status_code=status.HTTP_200_OK)
+def get_bom_upload_history(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("master:read")),
+) -> dict:
+    """Retrieve history of BOM upload sessions."""
+    from .schemas import BOMUploadSessionOut
+    sessions = MasterService(db).list_bom_sessions()
+    data = [BOMUploadSessionOut.model_validate(s).model_dump() for s in sessions]
+    return ok(data, message="BOM upload history retrieved.")
+
+
+@router.get("/dashboard/stats", response_model=dict, status_code=status.HTTP_200_OK)
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("master:read")),
+) -> dict:
+    """Retrieve top-level dashboard statistics."""
+    from .schemas import DashboardStatsOut
+    stats = MasterService(db).get_dashboard_stats()
+    return ok(DashboardStatsOut(**stats).model_dump(), message="Dashboard stats retrieved.")

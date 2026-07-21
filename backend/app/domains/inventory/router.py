@@ -23,7 +23,9 @@ from app.domains.inventory.models import InventoryTransaction
 from app.domains.inventory.schemas import (
     EODCountRequest,
     InventoryTransactionOut,
+    VarianceReportItemOut,
 )
+from app.utils.export import ExportFormat, generate_export
 from app.domains.inventory.service import InventoryService
 from app.infrastructure.database import get_db
 from app.utils.file_validation import validate_upload_file
@@ -49,8 +51,13 @@ async def preview_opening_balance(
     Required columns: Material Code, Quantity, UoM, Warehouse, Date (DD/MM/YYYY)
     """
     content = await validate_upload_file(file, db)
+    
+    is_admin = current_user.role.name.lower() == "admin"
     preview = InventoryService(db).preview_opening_balance(
-        content, file.filename or "upload.xlsx"
+        content, 
+        file.filename or "upload.xlsx",
+        user_warehouse_id=current_user.warehouse_id,
+        is_admin=is_admin
     )
     return ok(
         preview.model_dump(),
@@ -85,6 +92,7 @@ async def commit_opening_balance(
         content,
         file.filename or "upload.xlsx",
         committed_by=current_user.id,
+        user_warehouse_id=current_user.warehouse_id,
         ignore_warnings=ignore_warnings,
         is_admin=is_admin,
     )
@@ -267,6 +275,108 @@ def list_balances(
     start = (page - 1) * page_size
     page_data = balances[start : start + page_size]
     return paginate(page_data, page=page, page_size=page_size, total=total)
+
+
+# ---------------------------------------------------------------------------
+# Variance Report
+# ---------------------------------------------------------------------------
+
+@router.get("/variance-report", response_model=dict, status_code=status.HTTP_200_OK)
+def get_variance_report(
+    warehouse_public_id: uuid.UUID | None = Query(None, description="Filter by warehouse."),
+    snapshot_date: str | None = Query(None, description="Snapshot date (YYYY-MM-DD). Defaults to today."),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("inventory:read")),
+) -> dict:
+    """Return a variance report comparing snapshot balance to current ledger balance."""
+    from datetime import date as date_cls
+    from app.domains.master.models import Warehouse
+    from dateutil import parser
+    
+    svc = InventoryService(db)
+    
+    target_date = None
+    if snapshot_date:
+        try:
+            target_date = parser.parse(snapshot_date).date()
+        except Exception:
+            from app.core.errors import ValidationError
+            raise ValidationError(f"Invalid date format: {snapshot_date}. Use YYYY-MM-DD.")
+            
+    wh_id = None
+    if warehouse_public_id:
+        wh = db.scalar(select(Warehouse).where(Warehouse.public_id == warehouse_public_id))
+        if wh:
+            wh_id = wh.id
+            
+    results = svc.get_variance_report(warehouse_id=wh_id, snapshot_date=target_date)
+    
+    total = len(results)
+    start = (page - 1) * page_size
+    page_data = results[start : start + page_size]
+    
+    return paginate(
+        [VarianceReportItemOut.model_validate(r).model_dump() for r in page_data],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+@router.get("/variance-report/export", status_code=status.HTTP_200_OK)
+def export_variance_report(
+    format_type: ExportFormat = Query("excel", alias="format"),
+    warehouse_public_id: uuid.UUID | None = Query(None, description="Filter by warehouse."),
+    snapshot_date: str | None = Query(None, description="Snapshot date (YYYY-MM-DD). Defaults to today."),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("inventory:read")),
+):
+    """Export variance report to Excel/CSV."""
+    from datetime import date as date_cls
+    from app.domains.master.models import Warehouse
+    from dateutil import parser
+    import pandas as pd
+    
+    svc = InventoryService(db)
+    
+    target_date = None
+    if snapshot_date:
+        try:
+            target_date = parser.parse(snapshot_date).date()
+        except Exception:
+            from app.core.errors import ValidationError
+            raise ValidationError(f"Invalid date format: {snapshot_date}. Use YYYY-MM-DD.")
+            
+    wh_id = None
+    if warehouse_public_id:
+        wh = db.scalar(select(Warehouse).where(Warehouse.public_id == warehouse_public_id))
+        if wh:
+            wh_id = wh.id
+            
+    results = svc.get_variance_report(warehouse_id=wh_id, snapshot_date=target_date)
+    
+    export_data = []
+    for row in results:
+        export_data.append({
+            "Warehouse": row["warehouse_name"],
+            "Material Code": row["material_code"],
+            "Material Name": row["material_name"],
+            "UoM": row["uom"],
+            "Snapshot Date": row["snapshot_date"].strftime("%Y-%m-%d") if row["snapshot_date"] else "",
+            "Snapshot Balance": row["snapshot_balance"],
+            "Current Ledger Balance": row["current_ledger_balance"],
+            "Variance": row["variance"],
+        })
+        
+    df = pd.DataFrame(export_data)
+    if df.empty:
+        df = pd.DataFrame(columns=[
+            "Warehouse", "Material Code", "Material Name", "UoM", 
+            "Snapshot Date", "Snapshot Balance", "Current Ledger Balance", "Variance"
+        ])
+
+    return generate_export(df, "Inventory_Variance_Report", format_type)
 
 
 # ---------------------------------------------------------------------------

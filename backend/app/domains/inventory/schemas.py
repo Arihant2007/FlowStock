@@ -42,6 +42,13 @@ class OpeningBalanceUploadPreview(BaseModel):
     valid_rows: int
     error_rows: int
     warning_rows: int
+    
+    total_materials: int = 0
+    total_quantity: Decimal = Field(default=Decimal("0"))
+    duplicates: int = 0
+    unknown_materials: int = 0
+    negative_quantities: int = 0
+    
     rows: list[dict]  # Each row contains raw values + validation status.
     warnings: list[str]
     errors: list[str]
@@ -60,3 +67,18 @@ class EODCountRequest(BaseModel):
 
     count_date: date
     items: list[EODCountItem] = Field(..., min_length=1)
+
+
+class VarianceReportItemOut(BaseModel):
+    """A single item in the variance report."""
+    material_public_id: uuid.UUID
+    material_code: str
+    material_name: str
+    warehouse_public_id: uuid.UUID
+    warehouse_name: str
+    snapshot_date: date | None
+    snapshot_balance: Decimal = Field(decimal_places=4)
+    current_ledger_balance: Decimal = Field(decimal_places=4)
+    variance: Decimal = Field(decimal_places=4)
+    variance_percentage: str
+    uom: str

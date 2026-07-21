@@ -194,9 +194,25 @@ export function RMPMRequestDetailPage() {
           <CardTitle className="text-base">Aggregated Material Summary</CardTitle>
         </CardHeader>
         <CardContent className="pt-0 px-0">
-          <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Dispatched', 'Received']}>
-            {materialSummary.map((mat) => (
-              <Tr key={mat.material_public_id}>
+          <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Status', 'Dispatched', 'Received']}>
+            {materialSummary.map((mat) => {
+              let statusLabel = ''
+              let statusColor = ''
+              if (!isPendingApprove) {
+                if (mat.approved_qty >= mat.requested_qty) {
+                  statusLabel = 'Available'
+                  statusColor = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                } else if (mat.approved_qty > 0) {
+                  statusLabel = 'Partial'
+                  statusColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                } else {
+                  statusLabel = 'Shortage'
+                  statusColor = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                }
+              }
+
+              return (
+              <Tr key={mat.material_public_id} className={!isPendingApprove && mat.approved_qty < mat.requested_qty ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
                 <Td>
                   <div className="font-medium">{mat.material_name}</div>
                   <div className="text-xs text-muted-foreground">{mat.material_code}</div>
@@ -219,10 +235,17 @@ export function RMPMRequestDetailPage() {
                     <span className="font-mono text-sm font-bold text-primary">{mat.approved_qty ? formatQty(mat.approved_qty) : '-'}</span>
                   )}
                 </Td>
+                <Td>
+                  {!isPendingApprove && statusLabel && (
+                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${statusColor}`}>
+                      {statusLabel}
+                    </span>
+                  )}
+                </Td>
                 <Td className="font-mono text-sm text-blue-600">{mat.dispatched_qty ? formatQty(mat.dispatched_qty) : '-'}</Td>
                 <Td className="font-mono text-sm text-green-600">{mat.received_qty ? formatQty(mat.received_qty) : '-'}</Td>
               </Tr>
-            ))}
+            )})}
           </Table>
         </CardContent>
       </Card>
@@ -238,9 +261,25 @@ export function RMPMRequestDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0 px-0">
-              <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', 'Approved', 'Dispatched', 'Received']}>
-                {sku.items.map((item) => (
-                  <Tr key={item.public_id}>
+              <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', 'Approved', 'Status', 'Dispatched', 'Received']}>
+                {sku.items.map((item) => {
+                  let statusLabel = ''
+                  let statusColor = ''
+                  if (!isPendingApprove) {
+                    if (item.approved_qty >= item.requested_qty) {
+                      statusLabel = 'Available'
+                      statusColor = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                    } else if (item.approved_qty > 0) {
+                      statusLabel = 'Partial'
+                      statusColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                    } else {
+                      statusLabel = 'Shortage'
+                      statusColor = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                    }
+                  }
+                  
+                  return (
+                  <Tr key={item.public_id} className={!isPendingApprove && item.approved_qty < item.requested_qty ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
                     <Td>
                       <div className="font-medium">{item.material_name}</div>
                       <div className="text-xs text-muted-foreground">{item.material_code}</div>
@@ -256,10 +295,17 @@ export function RMPMRequestDetailPage() {
                         <span className="font-mono text-sm font-bold text-primary">{item.approved_qty ? formatQty(item.approved_qty) : '-'}</span>
                       )}
                     </Td>
+                    <Td>
+                      {!isPendingApprove && statusLabel && (
+                        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${statusColor}`}>
+                          {statusLabel}
+                        </span>
+                      )}
+                    </Td>
                     <Td className="font-mono text-sm text-blue-600">{item.dispatched_qty ? formatQty(item.dispatched_qty) : '-'}</Td>
                     <Td className="font-mono text-sm text-green-600">{item.received_qty ? formatQty(item.received_qty) : '-'}</Td>
                   </Tr>
-                ))}
+                )})}
               </Table>
             </CardContent>
           </Card>

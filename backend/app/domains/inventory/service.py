@@ -93,6 +93,79 @@ class InventoryService:
 
         return inbound - outbound
 
+    def get_variance_report(
+        self, warehouse_id: int | None = None, snapshot_date: object | None = None
+    ) -> list[dict[str, Any]]:
+        """Generate a variance report comparing snapshot to current ledger."""
+        from datetime import date as date_cls
+        from app.domains.master.models import Material, Warehouse
+        from app.domains.inventory.models import InventorySnapshot
+        
+        target_date = snapshot_date or date_cls.today()
+        
+        # We need all materials and warehouses that either have a snapshot OR a current balance
+        # For simplicity and correctness, we will iterate over materials and warehouses.
+        mat_query = select(Material).where(Material.deleted_at.is_(None))
+        wh_query = select(Warehouse).where(Warehouse.deleted_at.is_(None))
+        if warehouse_id is not None:
+            wh_query = wh_query.where(Warehouse.id == warehouse_id)
+            
+        materials = list(self._db.scalars(mat_query).all())
+        warehouses = list(self._db.scalars(wh_query).all())
+        
+        # Load snapshots for target_date
+        snap_query = select(InventorySnapshot).where(
+            InventorySnapshot.snapshot_date == target_date,
+            InventorySnapshot.is_active == True
+        )
+        if warehouse_id is not None:
+            snap_query = snap_query.where(InventorySnapshot.warehouse_id == warehouse_id)
+        snapshots = self._db.scalars(snap_query).all()
+        
+        snap_map = {(s.material_id, s.warehouse_id): s.closing_balance for s in snapshots}
+        
+        results = []
+        for wh in warehouses:
+            for mat in materials:
+                snap_bal = snap_map.get((mat.id, wh.id))
+                ledger_bal = self.get_balance(mat.id, wh.id)
+                
+                # If neither has a balance, skip
+                if snap_bal is None and ledger_bal == Decimal("0"):
+                    continue
+                    
+                snap_val = snap_bal if snap_bal is not None else Decimal("0")
+                
+                variance = ledger_bal - snap_val
+                
+                # Snapshot = 0 and Ledger = 0 → 0%
+                # Snapshot = 0 and Ledger > 0 → N/A
+                # Otherwise use the standard percentage calculation
+                if snap_val == Decimal("0"):
+                    if ledger_bal == Decimal("0"):
+                        variance_percentage = "0.00"
+                    else:
+                        variance_percentage = "N/A"
+                else:
+                    pct = (variance / snap_val) * Decimal("100")
+                    variance_percentage = f"{pct:.2f}"
+                    
+                results.append({
+                    "material_public_id": str(mat.public_id),
+                    "material_code": mat.code,
+                    "material_name": mat.name,
+                    "warehouse_public_id": str(wh.public_id),
+                    "warehouse_name": wh.name,
+                    "snapshot_date": target_date,
+                    "snapshot_balance": snap_val,
+                    "current_ledger_balance": ledger_bal,
+                    "variance": variance,
+                    "variance_percentage": variance_percentage,
+                    "uom": mat.uom,
+                })
+                
+        return results
+
     # ------------------------------------------------------------------
     # Reservation (called inside request approval workflow)
     # ------------------------------------------------------------------
@@ -366,7 +439,9 @@ class InventoryService:
         return df, []
 
     def preview_opening_balance(
-        self, file_bytes: bytes, filename: str
+        self, file_bytes: bytes, filename: str, *,
+        user_warehouse_id: int | None = None,
+        is_admin: bool = False,
     ) -> OpeningBalanceUploadPreview:
         """Validate an opening balance Excel file and return a row-by-row preview.
 
@@ -416,6 +491,12 @@ class InventoryService:
         errors: list[str] = []
         warnings: list[str] = []
         seen_keys: dict[tuple[str, str, str], int] = {}
+        
+        total_quantity = Decimal("0")
+        unique_materials = set()
+        unknown_materials_count = 0
+        negative_quantities_count = 0
+        duplicates_count = 0
 
         for idx, row in df.iterrows():
             row_num = int(idx) + 2  # header on row 1
@@ -441,13 +522,28 @@ class InventoryService:
             # --- Date ---
             try:
                 from dateutil import parser as dateutil_parser
+                from app.core.config import get_settings
+                from datetime import timedelta
 
                 parsed_date: date_cls = dateutil_parser.parse(
                     date_raw, dayfirst=True
                 ).date()
+                
+                settings = get_settings()
+                max_past_date = date_cls.today() - timedelta(days=settings.snapshot_edit_window_days)
+                
                 if parsed_date > date_cls.today():
                     row_status = "error"
                     row_messages.append(f"Date '{date_raw}' is in the future.")
+                elif parsed_date < max_past_date:
+                    if not is_admin:
+                        row_status = "error"
+                        row_messages.append(f"Date '{date_raw}' is locked. Cannot edit snapshots older than {settings.snapshot_edit_window_days} days.")
+                    else:
+                        if row_status != "error":
+                            row_status = "warning"
+                        row_messages.append(f"Date '{date_raw}' is locked. Admin override will be logged.")
+                        warnings.append(row_messages[-1])
             except Exception:  # noqa: BLE001
                 row_status = "error"
                 row_messages.append(f"Cannot parse date '{date_raw}'. Use DD/MM/YYYY.")
@@ -458,17 +554,24 @@ class InventoryService:
             if material is None:
                 row_status = "error"
                 row_messages.append(f"Material code '{mat_code}' not found.")
+                unknown_materials_count += 1
             elif material.uom.lower() != uom_raw.lower():
                 row_status = "error"
                 row_messages.append(
                     f"UoM mismatch: uploaded '{uom_raw}', expected '{material.uom}'."
                 )
+            
+            if material is not None:
+                unique_materials.add(mat_code)
 
             # --- Warehouse ---
             warehouse = warehouse_map.get(wh_name)
             if warehouse is None:
                 row_status = "error"
                 row_messages.append(f"Warehouse '{wh_name}' not found.")
+            elif not is_admin and user_warehouse_id and warehouse.id != user_warehouse_id:
+                row_status = "error"
+                row_messages.append(f"Not authorized to upload inventory for warehouse '{wh_name}'.")
 
             # --- Duplicate detection ---
             dup_key = (mat_code, wh_name, date_raw)
@@ -480,8 +583,14 @@ class InventoryService:
                     f"(first seen on row {seen_keys[dup_key]}). Last row wins."
                 )
                 warnings.append(row_messages[-1])
+                duplicates_count += 1
             else:
                 seen_keys[dup_key] = row_num
+                
+            if qty < 0:
+                negative_quantities_count += 1
+            elif row_status != "error":
+                total_quantity += qty
 
             rows_out.append(
                 {
@@ -503,6 +612,11 @@ class InventoryService:
             valid_rows=len(rows_out) - error_count - warning_count,
             error_rows=error_count,
             warning_rows=warning_count,
+            total_materials=len(unique_materials),
+            total_quantity=total_quantity,
+            duplicates=duplicates_count,
+            unknown_materials=unknown_materials_count,
+            negative_quantities=negative_quantities_count,
             rows=rows_out,
             warnings=warnings,
             errors=errors,
@@ -514,6 +628,7 @@ class InventoryService:
         filename: str,
         *,
         committed_by: int,
+        user_warehouse_id: int | None = None,
         ignore_warnings: bool = False,
         is_admin: bool = False,
     ) -> dict[str, Any]:
@@ -581,13 +696,23 @@ class InventoryService:
 
             try:
                 from dateutil import parser as dateutil_parser
+                from app.core.config import get_settings
+                from datetime import timedelta
 
                 parsed_date: date_cls = dateutil_parser.parse(
                     date_raw, dayfirst=True
                 ).date()
+                
+                settings = get_settings()
+                max_past_date = date_cls.today() - timedelta(days=settings.snapshot_edit_window_days)
+                
                 if parsed_date > date_cls.today():
                     errors_found.append(f"Date '{date_raw}' is in the future.")
                     continue
+                elif parsed_date < max_past_date:
+                    if not is_admin:
+                        errors_found.append(f"Date '{date_raw}' is locked. Cannot edit snapshots older than {settings.snapshot_edit_window_days} days.")
+                        continue
             except Exception:  # noqa: BLE001
                 errors_found.append(f"Cannot parse date '{date_raw}'.")
                 continue
@@ -605,6 +730,9 @@ class InventoryService:
             warehouse = warehouse_map.get(wh_name)
             if warehouse is None:
                 errors_found.append(f"Warehouse '{wh_name}' not found.")
+                continue
+            if not is_admin and user_warehouse_id and warehouse.id != user_warehouse_id:
+                errors_found.append(f"Not authorized to upload inventory for warehouse '{wh_name}'.")
                 continue
 
             dup_key = (mat_code, wh_name, str(parsed_date))
@@ -630,15 +758,9 @@ class InventoryService:
                 .where(InventorySnapshot.snapshot_date == snap_date)
                 .limit(1)
             )
-            if exists and not is_admin:
-                wh_name = next(
-                    entry["warehouse"].name
-                    for entry in valid_rows.values()
-                    if entry["warehouse"].id == wh_id
-                )
-                raise ValidationError(
-                    f"An inventory snapshot already exists for {wh_name} on {snap_date}. Only an Admin can replace it."
-                )
+            if exists:
+                # Log or just proceed as we will upsert
+                pass
 
         adjustments_created = 0
         snapshots_upserted = 0
@@ -667,26 +789,55 @@ class InventoryService:
                 )
                 adjustments_created += 1
 
-            # Upsert snapshot
-            existing_snapshot = self._db.scalar(
+            # Upsert snapshot (with versioning)
+            existing_snapshots = self._db.scalars(
                 select(InventorySnapshot)
                 .where(InventorySnapshot.material_id == material.id)
                 .where(InventorySnapshot.warehouse_id == warehouse.id)
                 .where(InventorySnapshot.snapshot_date == snapshot_date)
-            )
-            if existing_snapshot is not None:
-                existing_snapshot.closing_balance = uploaded_qty
-            else:
-                self._db.add(
-                    InventorySnapshot(
-                        material_id=material.id,
-                        warehouse_id=warehouse.id,
-                        snapshot_date=snapshot_date,
-                        closing_balance=uploaded_qty,
-                        reserved_balance=Decimal("0.0000"),
-                        created_by=committed_by,
-                    )
+            ).all()
+            
+            # Check if this requires an admin override audit log
+            from app.core.config import get_settings
+            from datetime import timedelta
+            settings = get_settings()
+            max_past_date = date_cls.today() - timedelta(days=settings.snapshot_edit_window_days)
+            if snapshot_date < max_past_date:
+                from app.domains.audit.models import AuditLog
+                audit_log = AuditLog(
+                    entity_type="InventorySnapshot",
+                    entity_id=0, # not single entity
+                    action="ADMIN_OVERRIDE",
+                    user_id=committed_by,
+                    details={
+                        "reason": "Admin bypassed edit window lock.",
+                        "snapshot_date": str(snapshot_date),
+                        "material": material.code,
+                        "warehouse": warehouse.name
+                    }
                 )
+                self._db.add(audit_log)
+            
+            max_version = 0
+            if existing_snapshots:
+                for snap in existing_snapshots:
+                    if snap.is_active:
+                        snap.is_active = False
+                    if snap.version > max_version:
+                        max_version = snap.version
+            
+            self._db.add(
+                InventorySnapshot(
+                    material_id=material.id,
+                    warehouse_id=warehouse.id,
+                    snapshot_date=snapshot_date,
+                    closing_balance=uploaded_qty,
+                    reserved_balance=Decimal("0.0000"),
+                    version=max_version + 1,
+                    is_active=True,
+                    created_by=committed_by,
+                )
+            )
             snapshots_upserted += 1
 
         self._db.flush()

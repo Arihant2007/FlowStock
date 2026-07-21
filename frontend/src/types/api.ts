@@ -89,6 +89,13 @@ export interface SKUOut {
   updated_at: string | null
 }
 
+/** Lightweight projection used for dropdowns — mirrors backend SKUOptionOut. */
+export interface SKUOption {
+  public_id: string
+  code: string
+  name: string
+}
+
 export interface BOMItemOut {
   public_id: string
   material: MaterialOut
@@ -125,6 +132,8 @@ export interface BOMUploadPreview {
   warnings: string[]
   skus_affected: string[]
   unknown_materials: string[]
+  session_id?: string
+  session_status?: string
 }
 
 // ─── Material Master Upload ───────────────────────────────────────────────────
@@ -157,6 +166,17 @@ export interface MaterialUploadPreview {
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
+
+export interface InventoryUploadStats {
+  snapshot_date: string | null
+  upload_time: string | null
+  uploaded_by: string | null
+  warehouse_name: string | null
+  version: number | null
+  total_materials: number
+  matched_count: number
+  variance_count: number
+}
 
 export interface InventoryBalance {
   material_public_id: string
@@ -196,6 +216,13 @@ export interface OpeningBalanceUploadPreview {
   valid_rows: number
   error_rows: number
   warning_rows: number
+  
+  total_materials: number
+  total_quantity: string
+  duplicates: number
+  unknown_materials: number
+  negative_quantities: number
+  
   rows: OpeningBalanceRow[]
   warnings: string[]
   errors: string[]

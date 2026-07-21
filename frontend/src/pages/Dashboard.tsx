@@ -16,6 +16,8 @@ import {
   ArrowRight,
   AlertCircle,
   Clock,
+  Upload,
+  CheckCircle,
 } from 'lucide-react'
 
 function StatCard({
@@ -65,9 +67,15 @@ export function DashboardPage() {
     enabled: hasPermission('inventory:read'),
   })
 
-  const { data: skusData } = useQuery({
-    queryKey: ['master', 'skus'],
-    queryFn: () => masterApi.listSKUs(1, 100),
+  const { data: dashboardStats } = useQuery({
+    queryKey: ['master', 'dashboard', 'stats'],
+    queryFn: () => masterApi.getDashboardStats(),
+    enabled: hasPermission('master:read'),
+  })
+
+  const { data: uploadHistory } = useQuery({
+    queryKey: ['master', 'boms', 'history'],
+    queryFn: () => masterApi.getBOMUploadHistory(),
     enabled: hasPermission('master:read'),
   })
 
@@ -76,8 +84,10 @@ export function DashboardPage() {
   const pendingRequests = requests.filter((r) =>
     ['SUBMITTED', 'RESERVED'].includes(r.status)
   )
-  const totalMaterials = balances.length
   const lowInventory = balances.filter((b) => parseFloat(b.available_balance) < 10)
+  
+  const stats = dashboardStats?.data
+  const recentImports = (uploadHistory?.data ?? []).slice(0, 5)
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -92,20 +102,27 @@ export function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Pending Requests"
-          value={pendingRequests.length}
-          icon={Clock}
-          color="bg-blue-50 text-blue-600"
-          subtitle="Awaiting action"
-        />
-        <StatCard
-          title="Active Materials"
-          value={totalMaterials}
+          title="Materials"
+          value={stats?.total_materials ?? 0}
           icon={Package}
           color="bg-purple-50 text-purple-600"
-          subtitle="Tracked in ledger"
+          subtitle="Total raw & packaging"
+        />
+        <StatCard
+          title="SKUs"
+          value={stats?.total_skus ?? 0}
+          icon={TrendingUp}
+          color="bg-amber-50 text-amber-600"
+          subtitle="Finished goods"
+        />
+        <StatCard
+          title="BOM Versions"
+          value={stats?.total_bom_versions ?? 0}
+          icon={ClipboardList}
+          color="bg-blue-50 text-blue-600"
+          subtitle="Active recipes"
         />
         <StatCard
           title="Low Inventory"
@@ -114,13 +131,17 @@ export function DashboardPage() {
           color={lowInventory.length > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}
           subtitle="Below 10 units"
         />
-        <StatCard
-          title="SKUs"
-          value={skusData?.data?.length ?? 0}
-          icon={TrendingUp}
-          color="bg-amber-50 text-amber-600"
-          subtitle="Total products"
-        />
+        
+        {/* Inventory Health KPI */}
+        {hasPermission('inventory:read') && stats?.inventory_upload && (
+          <StatCard
+            title="Inventory Health"
+            value={`${stats.inventory_upload.total_materials > 0 ? ((stats.inventory_upload.matched_count / stats.inventory_upload.total_materials) * 100).toFixed(1) : 0}%`}
+            icon={CheckCircle}
+            color="bg-emerald-50 text-emerald-600"
+            subtitle={`${stats.inventory_upload.variance_count} variances`}
+          />
+        )}
       </div>
 
       {/* Quick actions */}
@@ -147,50 +168,137 @@ export function DashboardPage() {
             </CardContent>
           </Card>
         )}
-        {hasPermission('inventory:upload') && (
-          <Card className="border-green-100 bg-green-50/50 hover:bg-green-50 transition-colors cursor-pointer" onClick={() => navigate('/inventory/upload')}>
+        {hasPermission('master:write') && (
+          <Card className="border-indigo-100 bg-indigo-50/50 hover:bg-indigo-50 transition-colors cursor-pointer" onClick={() => navigate('/master/boms/upload')}>
             <CardContent className="pt-6 flex items-center justify-between">
               <div>
-                <p className="font-semibold text-green-900">Upload Inventory</p>
-                <p className="text-sm text-green-700/70 mt-0.5">Daily RMPM snapshot</p>
+                <p className="font-semibold text-indigo-900">Upload BOM</p>
+                <p className="text-sm text-indigo-700/70 mt-0.5">Import recipes from Excel</p>
               </div>
-              <ArrowRight className="h-5 w-5 text-green-500" />
+              <ArrowRight className="h-5 w-5 text-indigo-500" />
             </CardContent>
           </Card>
         )}
       </div>
 
-      {/* Recent requests */}
-      {hasPermission('requests:read') && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <ClipboardList className="h-4 w-4" />
-              Recent Requests
-            </CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => navigate(hasPermission('requests:approve') ? '/rmpm/requests' : '/ods/requests')}>
-              View all <ArrowRight className="h-3.5 w-3.5 ml-1" />
-            </Button>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <Table
-              headers={['Date', 'Status', 'Notes', 'Created']}
-              isLoading={reqLoading}
-              isEmpty={requests.length === 0}
-              emptyMessage="No requests yet."
-            >
-              {requests.map((r) => (
-                <Tr key={r.public_id} onClick={() => navigate(hasPermission('requests:approve') ? `/rmpm/requests/${r.public_id}` : '/ods/requests')}>
-                  <Td>{formatDate(r.request_date)}</Td>
-                  <Td><Badge label={r.status} variant="status" /></Td>
-                  <Td className="text-muted-foreground max-w-xs truncate">{r.notes || '—'}</Td>
-                  <Td className="text-muted-foreground">{formatDateTime(r.created_at)}</Td>
-                </Tr>
-              ))}
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent requests */}
+        {hasPermission('requests:read') && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <ClipboardList className="h-4 w-4" />
+                Recent Requests
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => navigate(hasPermission('requests:approve') ? '/rmpm/requests' : '/ods/requests')}>
+                View all <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Table
+                headers={['Date', 'Status', 'Notes', 'Created']}
+                isLoading={reqLoading}
+                isEmpty={requests.length === 0}
+                emptyMessage="No requests yet."
+              >
+                {requests.map((r) => (
+                  <Tr key={r.public_id} onClick={() => navigate(hasPermission('requests:approve') ? `/rmpm/requests/${r.public_id}` : '/ods/requests')}>
+                    <Td>{formatDate(r.request_date)}</Td>
+                    <Td><Badge label={r.status} variant="status" /></Td>
+                    <Td className="text-muted-foreground max-w-xs truncate">{r.notes || '—'}</Td>
+                    <Td className="text-muted-foreground">{formatDateTime(r.created_at)}</Td>
+                  </Tr>
+                ))}
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Recent BOM Imports */}
+        {hasPermission('master:read') && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Upload className="h-4 w-4" />
+                Recent Master Data Imports
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/master/boms')}>
+                View all <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <Table
+                headers={['Filename', 'Status', 'Date', 'SKUs Created']}
+                isLoading={!uploadHistory}
+                isEmpty={recentImports.length === 0}
+                emptyMessage="No imports yet."
+              >
+                {recentImports.map((i: any) => (
+                  <Tr key={i.public_id}>
+                    <Td className="font-medium truncate max-w-[150px]" title={i.filename}>{i.filename}</Td>
+                    <Td><Badge label={i.status} variant="status" /></Td>
+                    <Td className="text-muted-foreground">{formatDateTime(i.created_at)}</Td>
+                    <Td className="text-right">
+                      {i.import_results?.skus_created ?? '—'}
+                    </Td>
+                  </Tr>
+                ))}
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Inventory Upload Details */}
+        {hasPermission('inventory:read') && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Package className="h-4 w-4" />
+                Latest Inventory Snapshot
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/inventory/upload')}>
+                Upload New <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {stats?.inventory_upload ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Business Date</p>
+                      <p className="text-lg font-semibold">{formatDate(stats.inventory_upload.snapshot_date)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Warehouse</p>
+                      <p className="text-lg font-semibold truncate" title={stats.inventory_upload.warehouse_name ?? 'Unknown'}>{stats.inventory_upload.warehouse_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Version</p>
+                      <p className="text-lg font-semibold">v{stats.inventory_upload.version}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Total Materials</p>
+                      <p className="text-sm">{stats.inventory_upload.total_materials}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Uploaded By</p>
+                      <p className="text-sm">{stats.inventory_upload.uploaded_by}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Upload Timestamp</p>
+                      <p className="text-sm">{formatDateTime(stats.inventory_upload.upload_time)}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-6 text-muted-foreground">
+                  <p>No inventory snapshot uploaded yet.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       {/* Low inventory alert */}
       {hasPermission('inventory:read') && lowInventory.length > 0 && (

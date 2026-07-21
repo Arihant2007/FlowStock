@@ -4,6 +4,7 @@ import type {
   WarehouseOut,
   MaterialOut,
   SKUOut,
+  SKUOption,
   BOMVersionOut,
   BOMUploadPreview,
   MaterialUploadPreview,
@@ -73,8 +74,8 @@ export const masterApi = {
     return data
   },
 
-  deleteMaterial: async (id: string) => {
-    const { data } = await client.delete<ApiResponse<{}>>(`/master/materials/${id}`)
+  archiveMaterial: async (id: string) => {
+    const { data } = await client.post<ApiResponse<{}>>(`/master/materials/${id}/archive`)
     return data
   },
 
@@ -107,13 +108,14 @@ export const masterApi = {
     return data
   },
 
-  extractMaterialsFromBOM: async (file: File, onlyUnknown: boolean = true) => {
+  extractMaterialsFromBOM: async (file: File | null, sessionId: string | null, onlyUnknown: boolean = true) => {
     const form = new FormData()
-    form.append('file', file)
+    if (file) form.append('file', file)
+    if (sessionId) form.append('session_id', sessionId)
     const response = await client.post('/master/materials/extract-from-bom', form, {
       params: { only_unknown: onlyUnknown },
       responseType: 'blob',
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
     return response.data
   },
@@ -123,6 +125,12 @@ export const masterApi = {
     const { data } = await client.get<ApiResponse<SKUOut[]>>('/master/skus', {
       params: { page, page_size: pageSize },
     })
+    return data
+  },
+
+  /** Lightweight endpoint — returns only public_id/code/name, no pagination. Use for dropdowns. */
+  listSKUOptions: async () => {
+    const { data } = await client.get<ApiResponse<SKUOption[]>>('/master/skus/options')
     return data
   },
 
@@ -152,9 +160,11 @@ export const masterApi = {
     return data
   },
 
-  previewBOMUpload: async (file: File) => {
+  previewBOMUpload: async (params: { file?: File; sessionId?: string }) => {
     const form = new FormData()
-    form.append('file', file)
+    if (params.file) form.append('file', params.file)
+    if (params.sessionId) form.append('session_id', params.sessionId)
+    
     const { data } = await client.post<ApiResponse<BOMUploadPreview>>(
       '/master/boms/upload/preview',
       form,
@@ -163,14 +173,44 @@ export const masterApi = {
     return data
   },
 
-  commitBOMUpload: async (file: File) => {
+  commitBOMUpload: async (sessionId: string) => {
     const form = new FormData()
-    form.append('file', file)
-    const { data } = await client.post<ApiResponse<{ skus_updated: number; items_created: number }>>(
+    form.append('session_id', sessionId)
+    const { data } = await client.post<ApiResponse<{
+      skus_created: number;
+      skus_updated: number;
+      bom_versions_created: number;
+      items_created: number;
+      materials_referenced: number;
+      warnings: string[];
+      duration_seconds: number;
+    }>>(
       '/master/boms/upload/commit',
       form,
       { headers: { 'Content-Type': 'multipart/form-data' } }
     )
+    return data
+  },
+
+  cancelBOMUpload: async (sessionId: string) => {
+    const { data } = await client.delete<ApiResponse<{}>>(`/master/boms/upload/session/${sessionId}`)
+    return data
+  },
+
+  getBOMUploadHistory: async () => {
+    // Assuming BOMUploadSessionOut type is added to types/api.ts
+    const { data } = await client.get<ApiResponse<any[]>>('/master/boms/uploads/history')
+    return data
+  },
+
+  getDashboardStats: async () => {
+    const { data } = await client.get<ApiResponse<{
+      total_materials: number;
+      total_skus: number;
+      total_bom_versions: number;
+      total_bom_items: number;
+      last_import_at: string | null;
+    }>>('/master/dashboard/stats')
     return data
   },
 }

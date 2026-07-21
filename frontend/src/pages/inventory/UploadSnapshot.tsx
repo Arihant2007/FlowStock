@@ -97,32 +97,57 @@ export function InventoryUploadPage() {
 
       {step === 'preview' && preview && (
         <div className="space-y-4">
-          <div className="grid grid-cols-4 gap-4">
-            <Card className="border-green-200 bg-green-50">
-              <CardContent className="pt-4 flex items-center gap-3">
-                <CheckCircle className="h-6 w-6 text-green-600" />
-                <div><p className="text-2xl font-bold text-green-700">{preview.valid_rows}</p><p className="text-xs text-green-600">Valid</p></div>
-              </CardContent>
-            </Card>
-            <Card className="border-amber-200 bg-amber-50">
-              <CardContent className="pt-4 flex items-center gap-3">
-                <AlertCircle className="h-6 w-6 text-amber-600" />
-                <div><p className="text-2xl font-bold text-amber-700">{preview.warning_rows}</p><p className="text-xs text-amber-600">Warnings</p></div>
-              </CardContent>
-            </Card>
-            <Card className="border-red-200 bg-red-50">
-              <CardContent className="pt-4 flex items-center gap-3">
-                <XCircle className="h-6 w-6 text-red-600" />
-                <div><p className="text-2xl font-bold text-red-700">{preview.error_rows}</p><p className="text-xs text-red-600">Errors</p></div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4 flex items-center gap-3">
-                <FileSpreadsheet className="h-6 w-6 text-muted-foreground" />
-                <div><p className="text-2xl font-bold">{preview.total_rows}</p><p className="text-xs text-muted-foreground">Total</p></div>
-              </CardContent>
-            </Card>
-          </div>
+          {/* Removed old individual cards for rows */}
+          
+          <Card className="border-blue-100 bg-blue-50/50">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-sm font-semibold text-blue-900">Validation Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+                
+                {/* Row Statistics */}
+                <div className="space-y-3">
+                  <p className="font-semibold text-blue-900 border-b border-blue-200 pb-1">Row Statistics</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <p className="text-muted-foreground">Total Rows</p>
+                    <p className="font-medium">{preview.total_rows}</p>
+                    <p className="text-muted-foreground">Valid Rows</p>
+                    <p className="font-medium text-green-700">{preview.valid_rows}</p>
+                    <p className="text-muted-foreground">Error Rows</p>
+                    <p className={`font-medium ${preview.error_rows > 0 ? 'text-red-600' : ''}`}>{preview.error_rows}</p>
+                    <p className="text-muted-foreground">Warnings</p>
+                    <p className={`font-medium ${preview.warning_rows > 0 ? 'text-amber-600' : ''}`}>{preview.warning_rows}</p>
+                  </div>
+                </div>
+
+                {/* Inventory Totals */}
+                <div className="space-y-3">
+                  <p className="font-semibold text-blue-900 border-b border-blue-200 pb-1">Inventory Totals</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <p className="text-muted-foreground">Total Materials</p>
+                    <p className="font-medium">{preview.total_materials}</p>
+                    <p className="text-muted-foreground">Total Quantity</p>
+                    <p className="font-medium">{parseFloat(preview.total_quantity).toLocaleString()}</p>
+                  </div>
+                </div>
+
+                {/* Validation Issues */}
+                <div className="space-y-3">
+                  <p className="font-semibold text-blue-900 border-b border-blue-200 pb-1">Validation Issues</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <p className="text-muted-foreground">Duplicates</p>
+                    <p className={`font-medium ${preview.duplicates > 0 ? 'text-amber-600' : ''}`}>{preview.duplicates}</p>
+                    <p className="text-muted-foreground">Unknown Mats</p>
+                    <p className={`font-medium ${preview.unknown_materials > 0 ? 'text-red-600' : ''}`}>{preview.unknown_materials}</p>
+                    <p className="text-muted-foreground">Negative Qty</p>
+                    <p className={`font-medium ${preview.negative_quantities > 0 ? 'text-red-600' : ''}`}>{preview.negative_quantities}</p>
+                  </div>
+                </div>
+
+              </div>
+            </CardContent>
+          </Card>
 
           {(preview.errors.length > 0 || preview.warnings.length > 0) && (
             <Card className={preview.errors.length > 0 ? "border-red-200" : "border-amber-200"}>

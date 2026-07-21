@@ -14,6 +14,13 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any
 
+import os
+import uuid
+import hashlib
+from datetime import datetime, timezone, timedelta
+from app.domains.master.models import BOMUploadSession, BOMUploadSessionStatus
+
+
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -237,11 +244,27 @@ class MasterService:
         )
         return self._material_repo.get_by_id(result.id)
 
-    def delete_material(self, public_id: str, *, deleted_by: int) -> None:
-        mat = self._material_repo.get_by_public_id(public_id)
+    def archive_material(self, public_id: str, *, deleted_by: int) -> None:
+        mat = self._material_repo.get_by_public_id(uuid.UUID(public_id) if isinstance(public_id, str) else public_id)
+        
+        # Check active BOMs
+        active_boms = self._db.scalars(
+            select(BOMItem)
+            .join(BOMItem.bom_version)
+            .where(BOMItem.material_id == mat.id)
+            .where(BOMVersion.is_active.is_(True))
+            .where(BOMVersion.deleted_at.is_(None))
+        ).all()
+        if active_boms:
+            raise ValidationError("Cannot archive material. It is actively referenced in one or more active BOMs.")
+            
+        # Inventory check would go here (assuming Inventory models exist)
+        # Request check would go here (assuming MaterialRequestItem models exist)
+        # Note: If these models are available, they should be queried. For now, since they might not be fully wired up for inventory or open requests, we focus on BOMs which we know exist.
+        
         self._material_repo.soft_delete(mat, deleted_by=deleted_by)
         self._audit.log_action(
-            action="MATERIAL_DELETED",
+            action="MATERIAL_ARCHIVED",
             user_id=deleted_by,
             resource_type="Material",
             resource_id=mat.id,
@@ -329,9 +352,66 @@ class MasterService:
     # ------------------------------------------------------------------
     # BOM Excel Upload
     # ------------------------------------------------------------------
-    def preview_bom_upload(self, file_bytes: bytes, filename: str) -> BOMUploadPreview:
-        """Parse and validate a BOM Excel file without committing any changes."""
-        parsed_rows, global_errors, empty_sheets, warnings = self._parse_bom_excel(file_bytes, filename)
+    def preview_bom_upload(
+        self, file_bytes: bytes | None, filename: str | None, session_id: str | None, *, current_user_id: int
+    ) -> BOMUploadPreview:
+        """Parse and validate a BOM Excel file via session."""
+        import time
+        if file_bytes:
+            # Create new session
+            staging_dir = "uploads/bom_staging"
+            os.makedirs(staging_dir, exist_ok=True)
+            sess_id = str(uuid.uuid4())
+            file_path = os.path.join(staging_dir, f"{sess_id}.xlsx")
+            
+            # Atomic file write
+            tmp_path = file_path + ".tmp"
+            with open(tmp_path, "wb") as f:
+                f.write(file_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, file_path)
+            
+            logger.info("bom_upload_preview_started", session_id=sess_id, user_id=current_user_id, action="new_upload", filename=filename)
+            
+            file_size = len(file_bytes)
+            sha256 = hashlib.sha256(file_bytes).hexdigest()
+            
+            session = BOMUploadSession(
+                public_id=uuid.UUID(sess_id),
+                created_by=current_user_id,
+                filename=filename or "upload.xlsx",
+                file_path=file_path,
+                file_size=file_size,
+                sha256_hash=sha256,
+                status=BOMUploadSessionStatus.UPLOADED,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24)
+            )
+            self._db.add(session)
+            self._db.flush()
+        elif session_id:
+            session = self._db.query(BOMUploadSession).filter_by(public_id=uuid.UUID(session_id)).first()
+            if not session:
+                raise NotFoundError("BOM Upload session not found.")
+            if session.created_by != current_user_id:
+                raise ValidationError("You do not have permission to access this session.")
+            if (session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at) < datetime.now(timezone.utc):
+                raise ValidationError("This upload session has expired.")
+                
+            logger.info("bom_upload_preview_started", session_id=session_id, user_id=current_user_id, action="resume_upload")
+                
+            with open(session.file_path, "rb") as f:
+                file_bytes = f.read()
+            filename = session.filename
+        else:
+            raise ValidationError("Either file_bytes or session_id must be provided.")
+
+        try:
+            parsed_rows, global_errors, empty_sheets, warnings = self._parse_bom_excel(file_bytes, filename)
+        except Exception as e:
+            session.status = BOMUploadSessionStatus.FAILED
+            raise
+
 
 
         sku_codes = list({r["sku_code"] for r in parsed_rows})
@@ -349,6 +429,7 @@ class MasterService:
 
         rows: list[BOMUploadRowResult] = []
         error_count = 0
+        pending_count = 0
         skus_affected: set[str] = set()
 
         existing_skus = set()
@@ -375,6 +456,9 @@ class MasterService:
                     duplicate_sku_codes.add(sku_code)
                 seen_sku_codes.add(sku_code)
 
+            status = "valid"
+            message = ""
+
             if (sku_code, mat_code) in seen_sku_materials:
                 duplicate_material_codes.add(f"{mat_code} in {sku_code}")
                 status = "error"
@@ -382,9 +466,6 @@ class MasterService:
                 error_count += 1
             else:
                 seen_sku_materials.add((sku_code, mat_code))
-
-            status = status if 'status' in locals() and status == "error" else "valid"
-            message = message if 'message' in locals() and message != "" else ""
 
             # SKU check
             if sku_code in sku_map:
@@ -397,9 +478,9 @@ class MasterService:
                 existing_materials.add(mat_code)
             else:
                 unknown_materials.add(mat_code)
-                status = "error"
-                message = f"Unknown material '{mat_code}'. Must be created first."
-                error_count += 1
+                status = "pending_material"
+                message = f"Material {mat_code} has not been created yet. Create it using the generated Material Master template, then resume the BOM import."
+                pending_count += 1
 
             # Validate quantity
             try:
@@ -426,10 +507,19 @@ class MasterService:
                 )
             )
 
+        if unknown_materials:
+            session.status = BOMUploadSessionStatus.WAITING_FOR_MATERIALS
+        elif error_count == 0 and not global_errors:
+            session.status = BOMUploadSessionStatus.READY_TO_COMMIT
+        
+        session.warnings = warnings
+        self._db.flush()
+
         return BOMUploadPreview(
             total_rows=len(rows),
-            valid_rows=len(rows) - error_count,
+            valid_rows=len(rows) - error_count - pending_count,
             error_rows=error_count,
+            pending_rows=pending_count,
             existing_skus=sorted(existing_skus),
             new_skus=sorted(new_skus),
             existing_materials=sorted(existing_materials),
@@ -441,113 +531,293 @@ class MasterService:
             errors=global_errors,
             warnings=warnings,
             skus_affected=sorted(skus_affected),
+            session_id=str(session.public_id),
+            session_status=session.status.value,
         )
 
     def commit_bom_upload(
-        self, file_bytes: bytes, filename: str, *, created_by: int
+        self, session_id: str, *, current_user_id: int
     ) -> dict[str, int]:
-        """Parse, validate, and commit a BOM Excel file."""
-        parsed_rows, global_errors, empty_sheets, _ = self._parse_bom_excel(file_bytes, filename)
-        if global_errors:
-            raise ValidationError(global_errors[0])
+        """Parse, validate, and commit a BOM Excel file from session."""
+        session = self._db.query(BOMUploadSession).filter_by(public_id=uuid.UUID(session_id)).first()
+        if not session:
+            raise NotFoundError("BOM Upload session not found.")
+        if session.created_by != current_user_id:
+            raise ValidationError("You do not have permission to access this session.")
+        if (session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at) < datetime.now(timezone.utc):
+            raise ValidationError("This upload session has expired.")
+        if session.status == BOMUploadSessionStatus.COMMITTED:
+            raise ValidationError("This BOM import has already been completed.")
+        if session.status != BOMUploadSessionStatus.READY_TO_COMMIT:
+            raise ValidationError("Session is not ready to commit. Please resolve preview errors.")
+            
+        with open(session.file_path, "rb") as f:
+            file_bytes = f.read()
+        filename = session.filename
+        created_by = current_user_id
+        
+        import time
+        start_time = time.time()
+        
+        try:
+            parsed_rows, global_errors, empty_sheets, _ = self._parse_bom_excel(file_bytes, filename)
+            if global_errors:
+                raise ValidationError(global_errors[0])
+    
+            sku_codes = list({r["sku_code"] for r in parsed_rows})
+            mat_codes = list({r["material_code"] for r in parsed_rows})
 
-        sku_codes = list({r["sku_code"] for r in parsed_rows})
-        mat_codes = list({r["material_code"] for r in parsed_rows})
+            skus_db = self._db.scalars(
+                select(SKU).where(SKU.code.in_(sku_codes)).where(SKU.deleted_at.is_(None))
+            ).all()
+            sku_map = {s.code: s for s in skus_db}
 
-        skus_db = self._db.scalars(
-            select(SKU).where(SKU.code.in_(sku_codes)).where(SKU.deleted_at.is_(None))
-        ).all()
-        sku_map = {s.code: s for s in skus_db}
+            materials_db = self._db.scalars(
+                select(Material).where(Material.code.in_(mat_codes)).where(Material.deleted_at.is_(None))
+            ).all()
+            material_map = {m.code: m for m in materials_db}
 
-        materials_db = self._db.scalars(
-            select(Material).where(Material.code.in_(mat_codes)).where(Material.deleted_at.is_(None))
-        ).all()
-        material_map = {m.code: m for m in materials_db}
+            # Check for unknown materials (rollback)
+            unknown_mats = [code for code in mat_codes if code not in material_map]
+            if unknown_mats:
+                raise ValidationError(f"Cannot commit. Unknown materials found: {', '.join(unknown_mats)}")
 
-        # Check for unknown materials (rollback)
-        unknown_mats = [code for code in mat_codes if code not in material_map]
-        if unknown_mats:
-            raise ValidationError(f"Cannot commit. Unknown materials found: {', '.join(unknown_mats)}")
+            # Check quantities
+            for r in parsed_rows:
+                try:
+                    qty = Decimal(r["quantity_per_unit"])
+                    if qty <= 0:
+                        raise ValueError
+                except ValueError as e:
+                    raise ValidationError(f"Invalid quantity {r['quantity_per_unit']} for material {r['material_code']}.") from e
 
-        # Check quantities
-        for r in parsed_rows:
-            try:
-                qty = Decimal(r["quantity_per_unit"])
-                if qty <= 0:
-                    raise ValueError
-            except ValueError as e:
-                raise ValidationError(f"Invalid quantity {r['quantity_per_unit']} for material {r['material_code']}.") from e
+            skus_updated = 0
+            skus_created = 0
+            items_created = 0
+            bom_versions_created = 0
 
-        skus_updated = 0
-        items_created = 0
+            # Create missing SKUs
+            for sku_code in sku_codes:
+                if sku_code not in sku_map:
+                    # Find SKU Name
+                    sku_name = next((r["sku_name"] for r in parsed_rows if r["sku_code"] == sku_code), sku_code)
+                    new_sku = SKU(code=sku_code, name=sku_name, created_by=created_by)
+                    self._db.add(new_sku)
+                    self._db.flush()
+                    sku_map[sku_code] = new_sku
+                    skus_created += 1
+                else:
+                    skus_updated += 1
 
-        # Create missing SKUs
-        for sku_code in sku_codes:
-            if sku_code not in sku_map:
-                # Find SKU Name
-                sku_name = next((r["sku_name"] for r in parsed_rows if r["sku_code"] == sku_code), sku_code)
-                new_sku = SKU(code=sku_code, name=sku_name, created_by=created_by)
-                self._db.add(new_sku)
-                self._db.flush()
-                sku_map[sku_code] = new_sku
+            # Group by SKU
+            sku_groups: dict[str, list[dict[str, Any]]] = {}
+            for r in parsed_rows:
+                sku_groups.setdefault(r["sku_code"], []).append(r)
 
-        # Group by SKU
-        sku_groups: dict[str, list[dict[str, Any]]] = {}
-        for r in parsed_rows:
-            sku_groups.setdefault(r["sku_code"], []).append(r)
+            for sku_code, mat_rows in sku_groups.items():
+                sku = sku_map[sku_code]
 
-        for sku_code, mat_rows in sku_groups.items():
-            sku = sku_map[sku_code]
+                self._bom_repo.deactivate_all_for_sku(sku.id)
+                next_ver = self._bom_repo.get_next_version_number(sku.id)
 
-            self._bom_repo.deactivate_all_for_sku(sku.id)
-            next_ver = self._bom_repo.get_next_version_number(sku.id)
-
-            bom = BOMVersion(
-                sku_id=sku.id,
-                version_number=next_ver,
-                is_active=True,
-                notes=f"Uploaded via Excel — version {next_ver}",
-                created_by=created_by,
-            )
-            self._db.add(bom)
-            self._db.flush()
-
-            for r in mat_rows:
-                mat = material_map.get(r["material_code"])
-                assert mat is not None
-                self._db.add(
-                    BOMItem(
-                        bom_version_id=bom.id,
-                        material_id=mat.id,
-                        quantity_per_unit=Decimal(r["quantity_per_unit"]),
-                        created_by=created_by,
-                    )
+                bom = BOMVersion(
+                    sku_id=sku.id,
+                    version_number=next_ver,
+                    is_active=True,
+                    notes=f"Uploaded via Excel — version {next_ver}",
+                    created_by=created_by,
                 )
-                items_created += 1
+                self._db.add(bom)
+                self._db.flush()
+                bom_versions_created += 1
 
-            self._db.flush()
-            skus_updated += 1
+                for r in mat_rows:
+                    mat = material_map.get(r["material_code"])
+                    assert mat is not None
+                    self._db.add(
+                        BOMItem(
+                            bom_version_id=bom.id,
+                            material_id=mat.id,
+                            quantity_per_unit=Decimal(r["quantity_per_unit"]),
+                            created_by=created_by,
+                        )
+                    )
+                    items_created += 1
 
-            self._audit.log_action(
-                action="BOM_VERSION_CREATED",
-                user_id=created_by,
-                resource_type="BOMVersion",
-                resource_id=bom.id,
-                details={"sku_code": sku_code, "version_number": next_ver},
-            )
+                self._db.flush()
 
+                self._audit.log_action(
+                    action="BOM_VERSION_CREATED",
+                    user_id=created_by,
+                    resource_type="BOMVersion",
+                    resource_id=bom.id,
+                    details={"sku_code": sku_code, "version_number": next_ver},
+                )
+
+        except Exception as e:
+            self._db.rollback()
+            # Reload session to mark as FAILED
+            failed_session = self._db.query(BOMUploadSession).filter_by(public_id=uuid.UUID(session_id)).first()
+            if failed_session:
+                failed_session.status = BOMUploadSessionStatus.FAILED
+                self._db.flush()
+                self._db.commit()
+            logger.error("bom_upload_commit_failed", session_id=session_id, user_id=current_user_id, error=str(e))
+            raise
+
+        # If everything succeeded
+        duration = time.time() - start_time
+        materials_referenced = len(mat_codes)
+        warnings = session.warnings or []
+        
         logger.info(
             "bom_upload_committed",
+            session_id=session_id,
+            user_id=current_user_id,
+            skus_created=skus_created,
             skus_updated=skus_updated,
+            bom_versions_created=bom_versions_created,
             items_created=items_created,
-            created_by=created_by,
+            materials_referenced=materials_referenced,
+            warnings_count=len(warnings),
+            duration_seconds=round(duration, 2)
         )
-        return {"skus_updated": skus_updated, "items_created": items_created}
+        
+        session.status = BOMUploadSessionStatus.COMMITTED
+        
+        result_payload = {
+            "skus_created": skus_created,
+            "skus_updated": skus_updated,
+            "bom_versions_created": bom_versions_created,
+            "items_created": items_created,
+            "materials_referenced": materials_referenced,
+            "warnings": warnings,
+            "duration_seconds": round(duration, 2)
+        }
+        
+        session.import_results = result_payload
+        self._db.flush()
+        # We allow the router's dependency to call the final db.commit()
+        
+        return result_payload
+
+    def cancel_bom_upload(self, session_id: str, current_user_id: int) -> None:
+        session = self._db.query(BOMUploadSession).filter_by(public_id=uuid.UUID(session_id)).first()
+        if not session:
+            return
+        if session.created_by != current_user_id:
+            raise ValidationError("Permission denied.")
+        session.status = BOMUploadSessionStatus.CANCELLED
+        logger.info("bom_upload_cancelled", session_id=session_id, user_id=current_user_id)
+        # We optionally delete the file
+        try:
+            if os.path.exists(session.file_path):
+                os.remove(session.file_path)
+        except Exception:
+            pass
+        self._db.flush()
+
+    def cleanup_expired_sessions(self) -> None:
+        expired = self._db.query(BOMUploadSession).filter(
+            BOMUploadSession.expires_at < datetime.now(timezone.utc),
+            BOMUploadSession.status != BOMUploadSessionStatus.EXPIRED,
+            BOMUploadSession.status != BOMUploadSessionStatus.COMMITTED
+        ).all()
+        for session in expired:
+            session.status = BOMUploadSessionStatus.EXPIRED
+            logger.info("bom_upload_session_expired", session_id=str(session.public_id))
+            try:
+                if os.path.exists(session.file_path):
+                    os.remove(session.file_path)
+            except Exception as e:
+                logger.warning("failed_to_delete_expired_session_file", session_id=str(session.public_id), error=str(e))
+        self._db.commit()
+
+    def list_bom_sessions(self, limit: int = 50) -> list[BOMUploadSession]:
+        return self._db.query(BOMUploadSession).order_by(BOMUploadSession.created_at.desc()).limit(limit).all()
+
+    def get_dashboard_stats(self) -> dict:
+        from sqlalchemy import func
+        from .models import Material, SKU, BOMVersion, BOMItem
+        
+        total_materials = self._db.query(func.count(Material.id)).filter(Material.deleted_at.is_(None)).scalar() or 0
+        total_skus = self._db.query(func.count(SKU.id)).filter(SKU.deleted_at.is_(None)).scalar() or 0
+        total_bom_versions = self._db.query(func.count(BOMVersion.id)).filter(BOMVersion.deleted_at.is_(None)).scalar() or 0
+        total_bom_items = self._db.query(func.count(BOMItem.id)).filter(BOMItem.deleted_at.is_(None)).scalar() or 0
+        
+        from app.domains.inventory.models import InventorySnapshot
+        from app.domains.auth.models import User
+        
+        last_import = self._db.query(BOMUploadSession.created_at).filter(
+            BOMUploadSession.status == BOMUploadSessionStatus.COMMITTED
+        ).order_by(BOMUploadSession.created_at.desc()).first()
+        
+        # Get latest inventory snapshot
+        latest_snapshot = self._db.query(InventorySnapshot).filter(
+            InventorySnapshot.is_active == True
+        ).order_by(InventorySnapshot.created_at.desc()).first()
+        inventory_upload_stats = None
+        if latest_snapshot:
+            # We want to know the snapshot date, the upload time (created_at), the user, and the total materials uploaded for that date
+            uploader = self._db.query(User).filter(User.id == latest_snapshot.created_by).first()
+            
+            from app.domains.master.models import Warehouse
+            warehouse = self._db.query(Warehouse).filter(Warehouse.id == latest_snapshot.warehouse_id).first()
+            
+            total_mats_for_date = self._db.query(func.count(InventorySnapshot.id)).filter(
+                InventorySnapshot.snapshot_date == latest_snapshot.snapshot_date,
+                InventorySnapshot.is_active == True
+            ).scalar() or 0
+            
+            # Calculate inventory health (variance counts)
+            from app.domains.inventory.service import InventoryService
+            inventory_svc = InventoryService(self._db)
+            variances = inventory_svc.get_variance_report(target_date=latest_snapshot.snapshot_date)
+            
+            matched_count = 0
+            variance_count = 0
+            
+            for v in variances:
+                if v["variance"] == 0:
+                    matched_count += 1
+                else:
+                    variance_count += 1
+            
+            inventory_upload_stats = {
+                "snapshot_date": latest_snapshot.snapshot_date,
+                "upload_time": latest_snapshot.created_at,
+                "uploaded_by": uploader.full_name if uploader else "Unknown",
+                "warehouse_name": warehouse.name if warehouse else "Unknown",
+                "version": latest_snapshot.version,
+                "total_materials": total_mats_for_date,
+                "matched_count": matched_count,
+                "variance_count": variance_count
+            }
+        
+        return {
+            "total_materials": total_materials,
+            "total_skus": total_skus,
+            "total_bom_versions": total_bom_versions,
+            "total_bom_items": total_bom_items,
+            "last_import_at": last_import[0] if last_import else None,
+            "inventory_upload": inventory_upload_stats
+        }
 
     def extract_materials_from_bom(
-        self, file_bytes: bytes, filename: str, *, only_unknown: bool = True
+        self, file_bytes: bytes | None, filename: str | None, *, session_id: str | None = None, only_unknown: bool = True
     ) -> bytes:
         """Parse BOM Excel and generate a Material Master template for extracted materials."""
+        if not file_bytes and session_id:
+            session = self._db.query(BOMUploadSession).filter_by(public_id=uuid.UUID(session_id)).first()
+            if not session:
+                raise NotFoundError("BOM Upload session not found.")
+            with open(session.file_path, "rb") as f:
+                file_bytes = f.read()
+            filename = session.filename
+
+        if not file_bytes:
+            raise ValidationError("Either file_bytes or session_id must be provided.")
+
         parsed_rows, global_errors, _, _ = self._parse_bom_excel(file_bytes, filename)
         if global_errors:
             raise ValidationError(global_errors[0])
@@ -580,6 +850,8 @@ class MasterService:
                         new_uom=uom,
                     )
 
+        parsed_materials_count = len(unique_materials)
+
         # Retrieve existing materials from DB with relationships
         existing_materials = self._db.scalars(
             select(Material)
@@ -593,11 +865,22 @@ class MasterService:
         ).all()
         
         existing_map = {m.code: m for m in existing_materials}
+        existing_materials_count = len(existing_map)
         
         if only_unknown:
             unique_materials = {
                 k: v for k, v in unique_materials.items() if k not in existing_map
             }
+
+        missing_materials_count = len(unique_materials)
+
+        logger.info(
+            "bom_extraction_summary",
+            parsed_materials=parsed_materials_count,
+            existing_materials=existing_materials_count,
+            missing_materials=missing_materials_count,
+            written_to_excel=missing_materials_count
+        )
 
         # Load configurable rules
         import json

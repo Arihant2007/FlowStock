@@ -57,21 +57,21 @@ export function MaterialUploadPage() {
   const handleGenerateFromBOM = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (!f) return
-    
-    try {
-      toast.info('Generating template from BOM...')
-      const blob = await masterApi.extractMaterialsFromBOM(f, true)
-      const url = window.URL.createObjectURL(new Blob([blob]))
-      const link = document.createElement('a')
-      link.href = url
-      link.setAttribute('download', 'extracted_materials.xlsx')
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      toast.success('Generated template downloaded. Fill it and upload here.')
-    } catch (err) {
-      toast.error('Failed to generate template from BOM')
-    } finally {
+        try {
+        toast.info('Generating template from BOM...')
+        const blob = await masterApi.extractMaterialsFromBOM(f, null, true)
+        const url = window.URL.createObjectURL(new Blob([blob]))
+        const link = document.createElement('a')
+        link.href = url
+        link.setAttribute('download', 'extracted_materials.xlsx')
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        toast.success('Generated template downloaded. Fill it and upload here.')
+      } catch (err: any) {
+        console.error('Failed to generate template from BOM', err)
+        toast.error(`Failed to generate template from BOM: ${getErrorMessage(err) || err.message}`)
+      } finally {
       e.target.value = '' // Reset input
     }
   }

@@ -11,10 +11,12 @@ import { MaterialsPage } from '@/pages/master/Materials'
 import { MaterialUploadPage } from '@/pages/master/MaterialUpload'
 import { SKUsPage } from '@/pages/master/SKUs'
 import { BOMUploadPage } from '@/pages/master/BOMUpload'
+import { BOMsPage } from '@/pages/master/BOMs'
 import { InventoryBalancesPage } from '@/pages/inventory/Balances'
 import { InventoryUploadPage } from '@/pages/inventory/UploadSnapshot'
 import { EODCountPage } from '@/pages/inventory/EODCount'
 import { TransactionHistoryPage } from '@/pages/inventory/TransactionHistory'
+import { VarianceReportPage } from '@/pages/inventory/VarianceReport'
 import { NewRequestPage } from '@/pages/ods/NewRequest'
 import { ODSRequestsPage } from '@/pages/ods/Requests'
 import { RMPMRequestsPage } from '@/pages/rmpm/Requests'
@@ -57,6 +59,7 @@ export function AppRouter() {
           <Route path="master/materials" element={<RequirePermission permission="master:read"><MaterialsPage /></RequirePermission>} />
           <Route path="master/material-upload" element={<RequirePermission permission="master:write"><MaterialUploadPage /></RequirePermission>} />
           <Route path="master/skus" element={<RequirePermission permission="master:read"><SKUsPage /></RequirePermission>} />
+          <Route path="master/boms" element={<RequirePermission permission="master:read"><BOMsPage /></RequirePermission>} />
           <Route path="master/bom-upload" element={<RequirePermission permission="master:write"><BOMUploadPage /></RequirePermission>} />
 
           {/* Inventory */}
@@ -64,6 +67,7 @@ export function AppRouter() {
           <Route path="inventory/upload" element={<RequirePermission permission="inventory:upload"><InventoryUploadPage /></RequirePermission>} />
           <Route path="inventory/eod-count" element={<RequirePermission permission="inventory:adjust"><EODCountPage /></RequirePermission>} />
           <Route path="inventory/transactions" element={<RequirePermission permission="inventory:read"><TransactionHistoryPage /></RequirePermission>} />
+          <Route path="inventory/variance" element={<RequirePermission permission="inventory:read"><VarianceReportPage /></RequirePermission>} />
 
           {/* ODS */}
           <Route path="ods/new-request" element={<RequirePermission permission="requests:create"><NewRequestPage /></RequirePermission>} />

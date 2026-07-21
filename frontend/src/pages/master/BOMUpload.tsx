@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { masterApi } from '@/api/master'
 import { Button } from '@/components/ui/button'
@@ -7,35 +7,138 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, Tr, Td } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { getErrorMessage } from '@/lib/utils'
-import { Upload, CheckCircle, XCircle, AlertCircle, FileSpreadsheet, ArrowRight, Download } from 'lucide-react'
+import { Upload, CheckCircle, XCircle, AlertCircle, FileSpreadsheet, ArrowRight, Download, ChevronRight } from 'lucide-react'
 import type { BOMUploadPreview } from '@/types/api'
+
+function CollapsibleCard({ title, count, children, defaultExpanded = false, icon: Icon, colorClass, borderClass, bgClass = "" }: any) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return (
+    <Card className={`${borderClass} ${bgClass} flex flex-col`}>
+      <CardHeader 
+        className="pb-2 pt-3 shrink-0 cursor-pointer flex flex-row items-center justify-between select-none hover:bg-black/5 transition-colors" 
+        onClick={() => setExpanded(!expanded)}
+      >
+        <CardTitle className={`text-sm ${colorClass} flex items-center gap-1.5`}>
+          <Icon className="h-4 w-4" /> {title} ({count})
+        </CardTitle>
+        <div className={`transform transition-transform duration-200 ${colorClass} ${expanded ? 'rotate-90' : 'rotate-0'}`}>
+          <ChevronRight className="h-4 w-4" />
+        </div>
+      </CardHeader>
+      <div className={`transition-all duration-300 ease-in-out overflow-hidden flex flex-col min-h-0 ${expanded ? 'max-h-[300px] opacity-100' : 'max-h-0 opacity-0'}`}>
+        {children}
+      </div>
+    </Card>
+  )
+}
+function formatMessage(msg: string) {
+  const match = msg.match(/Sheet '[^']+', Row (\d+): (.*)/)
+  if (match) {
+    return <><span className="font-semibold opacity-75">Row {match[1]}</span> &ndash; {match[2]}</>
+  }
+  return msg
+}
+
+function ExpandableList({ items, renderItem, className, limit = 20, buttonClass }: { items: string[], renderItem: (item: string, i: number) => React.ReactNode, className?: string, limit?: number, buttonClass?: string }) {
+  const [showAll, setShowAll] = useState(false)
+  const displayed = showAll ? items : items.slice(0, limit)
+  
+  return (
+    <>
+      <ul className={className}>
+        {displayed.map(renderItem)}
+      </ul>
+      {items.length > limit && (
+        <div className="pt-2 sticky bottom-0 pb-1 mt-auto bg-inherit">
+          <Button variant="outline" size="sm" className={`h-7 text-xs w-full bg-white/50 backdrop-blur-sm ${buttonClass}`} onClick={() => setShowAll(!showAll)}>
+            {showAll ? 'Show Less' : `Show All (${items.length - limit} more)`}
+          </Button>
+        </div>
+      )}
+    </>
+  )
+}
 
 export function BOMUploadPage() {
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<BOMUploadPreview | null>(null)
-  const [step, setStep] = useState<'upload' | 'preview' | 'done'>('upload')
+  const [step, setStep] = useState<'upload' | 'pending_session' | 'preview' | 'done'>('upload')
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [commitResult, setCommitResult] = useState<any>(null)
+  
+  useEffect(() => {
+    const savedSession = sessionStorage.getItem('bomUploadSessionId')
+    if (savedSession) {
+      setSessionId(savedSession)
+      setStep('pending_session')
+    }
+  }, [])
+
 
   const previewMutation = useMutation({
-    mutationFn: (f: File) => masterApi.previewBOMUpload(f),
+    mutationFn: (params: { file?: File, sessionId?: string }) => masterApi.previewBOMUpload(params),
     onSuccess: (data) => {
       setPreview(data.data)
+      if (data.data.session_id) {
+        sessionStorage.setItem('bomUploadSessionId', data.data.session_id)
+        setSessionId(data.data.session_id)
+      }
       setStep('preview')
     },
-    onError: (err) => toast.error(getErrorMessage(err)),
+    onError: (err) => {
+        toast.error(getErrorMessage(err))
+        if (err.message?.includes('expired') || err.message?.includes('found')) {
+            sessionStorage.removeItem('bomUploadSessionId')
+            setSessionId(null)
+            setStep('upload')
+        }
+    },
   })
 
+  const qc = useQueryClient()
+
   const commitMutation = useMutation({
-    mutationFn: (f: File) => masterApi.commitBOMUpload(f),
+    mutationFn: (sId: string) => masterApi.commitBOMUpload(sId),
     onSuccess: (data) => {
-      toast.success(`BOM uploaded! ${(data.data as { skus_updated: number }).skus_updated} SKU(s) updated.`)
+      toast.success('BOM imported successfully.')
+      // Invalidate SKU options + full SKU list so dropdowns reflect new SKUs immediately
+      qc.invalidateQueries({ queryKey: ['master', 'skus'] })
+      qc.invalidateQueries({ queryKey: ['master', 'skuOptions'] })
+      // Refresh dashboard SKU/BOM counters
+      qc.invalidateQueries({ queryKey: ['master', 'dashboard', 'stats'] })
+      sessionStorage.removeItem('bomUploadSessionId')
+      setSessionId(null)
+      setCommitResult(data.data)
       setStep('done')
     },
     onError: (err) => toast.error(getErrorMessage(err)),
+  })
+  
+  const cancelMutation = useMutation({
+    mutationFn: (sId: string) => masterApi.cancelBOMUpload(sId),
+    onSuccess: () => {
+      sessionStorage.removeItem('bomUploadSessionId')
+      setSessionId(null)
+      setFile(null)
+      setPreview(null)
+      setStep('upload')
+      toast.success('Upload session cancelled')
+    }
   })
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (f) { setFile(f); setPreview(null); setStep('upload') }
+  }
+  
+  const handleReplace = () => {
+    if (sessionId) {
+      cancelMutation.mutate(sessionId)
+    } else {
+      setFile(null)
+      setPreview(null)
+      setStep('upload')
+    }
   }
 
   return (
@@ -64,6 +167,26 @@ export function BOMUploadPage() {
         ))}
       </div>
 
+      {/* Pending Session Step */}
+      {step === 'pending_session' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending Upload Found</CardTitle>
+            <CardDescription>You have an unfinished BOM upload session.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex gap-3">
+              <Button onClick={() => previewMutation.mutate({ sessionId: sessionId! })} isLoading={previewMutation.isPending}>
+                Resume Upload
+              </Button>
+              <Button variant="outline" onClick={handleReplace} isLoading={cancelMutation.isPending}>
+                Discard & Start New
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Step 1: Upload */}
       {step === 'upload' && (
         <Card>
@@ -84,7 +207,7 @@ export function BOMUploadPage() {
             </label>
             {file && (
               <Button
-                onClick={() => previewMutation.mutate(file)}
+                onClick={() => previewMutation.mutate({ file })}
                 isLoading={previewMutation.isPending}
                 className="w-full"
               >
@@ -99,7 +222,7 @@ export function BOMUploadPage() {
       {step === 'preview' && preview && (
         <div className="space-y-4">
           {/* Summary */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <Card className="border-green-200 bg-green-50">
               <CardContent className="pt-4">
                 <div className="flex items-center gap-2">
@@ -122,6 +245,17 @@ export function BOMUploadPage() {
                 </div>
               </CardContent>
             </Card>
+            <Card className="border-amber-200 bg-amber-50">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-amber-600" />
+                  <div>
+                    <p className="text-2xl font-bold text-amber-700">{preview.pending_rows ?? 0}</p>
+                    <p className="text-xs text-amber-600">Pending Materials</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
             <Card>
               <CardContent className="pt-4">
                 <div className="flex items-center gap-2">
@@ -137,34 +271,42 @@ export function BOMUploadPage() {
 
           {/* Errors */}
           {preview.errors.length > 0 && (
-            <Card className="border-red-200">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-red-700 flex items-center gap-1.5">
-                  <AlertCircle className="h-4 w-4" /> Errors
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <ul className="space-y-1">
-                  {preview.errors.map((e, i) => <li key={i} className="text-sm text-red-600">• {e}</li>)}
-                </ul>
+            <CollapsibleCard 
+              title="Errors" 
+              count={preview.errors.length} 
+              defaultExpanded={true} 
+              icon={AlertCircle} 
+              colorClass="text-red-700" 
+              borderClass="border-red-200"
+            >
+              <CardContent className="pt-0 overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-red-200 hover:[&::-webkit-scrollbar-thumb]:bg-red-300 relative">
+                <ExpandableList 
+                  items={preview.errors} 
+                  className="space-y-1 pl-4 list-disc text-sm text-red-700 mt-2"
+                  buttonClass="text-red-700 hover:text-red-800 border-red-200 hover:bg-red-100"
+                  renderItem={(e: any, i: number) => <li key={i}>{formatMessage(e)}</li>} 
+                />
               </CardContent>
-            </Card>
-          )}
-
-          {/* Warnings */}
+            </CollapsibleCard>
+          )}          {/* Warnings Grouped */}
           {preview.warnings && preview.warnings.length > 0 && (
-            <Card className="border-amber-200">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="h-4 w-4" /> Warnings
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <ul className="space-y-1">
-                  {preview.warnings.map((w, i) => <li key={i} className="text-sm text-amber-600">• {w}</li>)}
-                </ul>
+            <CollapsibleCard 
+              title="Warnings" 
+              count={preview.warnings.length} 
+              defaultExpanded={false} 
+              icon={AlertCircle} 
+              colorClass="text-amber-700" 
+              borderClass="border-amber-200"
+            >
+              <CardContent className="pt-0 overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-amber-200 hover:[&::-webkit-scrollbar-thumb]:bg-amber-300 relative">
+                <ExpandableList 
+                  items={preview.warnings} 
+                  className="space-y-1 pl-4 list-disc text-amber-700 text-sm mt-2"
+                  buttonClass="text-amber-800 hover:text-amber-900 border-amber-200 hover:bg-amber-100"
+                  renderItem={(w: any, i: number) => <li key={i}>{formatMessage(w)}</li>} 
+                />
               </CardContent>
-            </Card>
+            </CollapsibleCard>
           )}
 
           {/* Rows preview */}
@@ -179,10 +321,11 @@ export function BOMUploadPage() {
                     <Td>{row.quantity_per_unit}</Td>
                     <Td>
                       <Badge
-                        label={row.status}
+                        label={row.status === 'pending_material' ? 'Pending Material' : row.status}
                         className={
                           row.status === 'valid' ? 'bg-green-100 text-green-800' :
                           row.status === 'error' ? 'bg-red-100 text-red-800' :
+                          row.status === 'pending_material' ? 'bg-amber-100 text-amber-800' :
                           'bg-amber-100 text-amber-800'
                         }
                       />
@@ -194,54 +337,141 @@ export function BOMUploadPage() {
             </CardContent>
           </Card>
 
-          <div className="flex gap-3 items-center">
-            <Button variant="outline" onClick={() => setStep('upload')}>Back</Button>
-            <Button
-              onClick={() => file && commitMutation.mutate(file)}
-              isLoading={commitMutation.isPending}
-              disabled={preview.error_rows > 0}
-            >
-              {preview.error_rows > 0 ? 'Fix errors to continue' : 'Commit Upload'}
-            </Button>
+          {/* Actions & Extraction Summary */}
+          <div className="flex flex-col gap-4">
             {preview.unknown_materials?.length > 0 && (
+              <Card className="bg-amber-50/50 border-amber-200">
+                <CardContent className="pt-4 flex flex-col md:flex-row items-center justify-between gap-4">
+                  <div className="space-y-1 text-sm text-amber-900">
+                    <p className="font-semibold text-base flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" /> Generate Missing Materials
+                    </p>
+                    <div className="grid grid-cols-2 gap-x-8 gap-y-1">
+                      <span>Unique Materials Found:</span>
+                      <span className="font-medium text-right">{new Set(preview.rows.filter(r => r.material_code).map(r => r.material_code)).size}</span>
+                      <span>Already Exist:</span>
+                      <span className="font-medium text-right">
+                        {new Set(preview.rows.filter(r => r.material_code).map(r => r.material_code)).size - preview.unknown_materials.length}
+                      </span>
+                      <span className="font-semibold">Need Import:</span>
+                      <span className="font-bold text-amber-700 text-right">{preview.unknown_materials.length}</span>
+                    </div>
+                    <p className="text-xs text-amber-800 mt-2">
+                      <strong>Workflow:</strong> 1. Download Template → 2. Complete Excel → 3. Upload to Material Master → 4. Click "Resume BOM Import"
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="bg-amber-100 text-amber-800 hover:bg-amber-200 shrink-0"
+                    onClick={async () => {
+                      if (!file && !sessionId) return;
+                      try {
+                        const blob = await masterApi.extractMaterialsFromBOM(null, sessionId, true);
+                        const url = window.URL.createObjectURL(new Blob([blob]));
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.setAttribute('download', 'extracted_materials.xlsx');
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                        toast.success('Generated template downloaded. Fill it and upload to Material Master.');
+                      } catch (e: any) {
+                        console.error('Extraction failed:', e);
+                        toast.error(`Failed to generate template: ${getErrorMessage(e) || e.message}`);
+                      }
+                    }}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Material Master
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            <div className="flex gap-3 items-center">
+              <Button variant="outline" onClick={handleReplace}>Cancel</Button>
               <Button
-                variant="secondary"
-                className="bg-amber-100 text-amber-800 hover:bg-amber-200"
-                onClick={async () => {
-                  if (!file) return;
-                  try {
-                    const blob = await masterApi.extractMaterialsFromBOM(file, true);
-                    const url = window.URL.createObjectURL(new Blob([blob]));
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.setAttribute('download', 'extracted_materials.xlsx');
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    toast.success('Generated template downloaded. Fill it and upload to Material Master.');
-                  } catch (e) {
-                    toast.error('Failed to generate template');
+                onClick={() => {
+                  if (preview.session_status === 'WAITING_FOR_MATERIALS') {
+                    sessionId && previewMutation.mutate({ sessionId })
+                  } else {
+                    sessionId && commitMutation.mutate(sessionId)
                   }
                 }}
+                isLoading={commitMutation.isPending || previewMutation.isPending}
+                disabled={preview.session_status !== 'READY_TO_COMMIT' && preview.session_status !== 'WAITING_FOR_MATERIALS'}
               >
-                <Download className="mr-2 h-4 w-4" />
-                Download Missing Materials Template
+                {preview.session_status === 'WAITING_FOR_MATERIALS' ? 'Resume BOM Import' : 'Commit Upload'}
               </Button>
-            )}
+            </div>
           </div>
         </div>
       )}
 
       {/* Step 3: Done */}
-      {step === 'done' && (
-        <Card className="border-green-200 bg-green-50">
-          <CardContent className="pt-8 pb-8 text-center">
-            <CheckCircle className="h-12 w-12 text-green-600 mx-auto mb-3" />
-            <h3 className="text-lg font-semibold text-green-800">Upload Successful</h3>
-            <p className="text-green-700 text-sm mt-1">BOM data has been updated in the system.</p>
-            <Button variant="outline" className="mt-4" onClick={() => { setStep('upload'); setFile(null); setPreview(null) }}>
-              Upload Another
-            </Button>
+      {step === 'done' && commitResult && (
+        <Card className="border-green-200">
+          <CardHeader className="bg-green-50/50 pb-4 border-b border-green-100">
+            <CardTitle className="text-lg font-semibold text-green-800 flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+              BOM Import Completed Successfully
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-6 space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-muted/50 p-4 rounded-lg text-center">
+                <p className="text-3xl font-bold text-primary">{commitResult.skus_created}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">SKUs Created</p>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-lg text-center">
+                <p className="text-3xl font-bold text-primary">{commitResult.skus_updated}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">SKUs Updated</p>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-lg text-center">
+                <p className="text-3xl font-bold text-primary">{commitResult.bom_versions_created}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">BOM Versions</p>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-lg text-center">
+                <p className="text-3xl font-bold text-primary">{commitResult.items_created}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">BOM Items</p>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center text-sm border-t pt-4">
+              <span className="text-muted-foreground">
+                <b className="text-foreground">{commitResult.materials_referenced}</b> Materials Referenced
+              </span>
+              <span className="text-muted-foreground">
+                Duration: <b className="text-foreground">{commitResult.duration_seconds?.toFixed(2)}s</b>
+              </span>
+            </div>
+
+            {commitResult.warnings && commitResult.warnings.length > 0 && (
+              <CollapsibleCard 
+                title="Warnings" 
+                count={commitResult.warnings.length} 
+                defaultExpanded={false} 
+                icon={AlertCircle} 
+                colorClass="text-amber-800" 
+                borderClass="border-amber-100"
+                bgClass="bg-amber-50"
+              >
+                <div className="overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-amber-200 hover:[&::-webkit-scrollbar-thumb]:bg-amber-300 relative p-4 pt-0">
+                  <ExpandableList 
+                    items={commitResult.warnings} 
+                    className="text-sm text-amber-700 list-disc pl-5 mt-2"
+                    buttonClass="text-amber-800 hover:text-amber-900 border-amber-200 hover:bg-amber-100"
+                    renderItem={(w: any, i: number) => <li key={i}>{formatMessage(w)}</li>} 
+                  />
+                </div>
+              </CollapsibleCard>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <Button onClick={() => { setStep('upload'); setFile(null); setPreview(null); setCommitResult(null) }}>
+                Upload Another BOM
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

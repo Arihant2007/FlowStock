@@ -79,7 +79,12 @@ class AppExceptionMiddleware(BaseHTTPMiddleware):
                 },
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("unhandled_error", exc_info=exc)
+            import traceback
+            traceback.print_exc()
+            try:
+                logger.exception("unhandled_error", exc_info=exc)
+            except Exception:
+                pass
             return JSONResponse(
                 status_code=500,
                 content={

@@ -41,11 +41,8 @@ from app.domains.requests.schemas import (
 logger = get_logger(__name__)
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "SUBMITTED": {"APPROVED", "PARTIALLY_APPROVED", "REJECTED"},
-    "APPROVED": {"DISPATCHED"},
-    "PARTIALLY_APPROVED": {"DISPATCHED"},
-    "DISPATCHED": {"RECEIVED"},
-    "RECEIVED": {"CLOSED"},
+    "DRAFT": {"SUBMITTED"},
+    "SUBMITTED": {"APPROVED", "REJECTED"},
 }
 
 
@@ -71,8 +68,19 @@ class RequestService:
 
     def _calculate_request_skus(
         self, payload: CreateRequestPayload | RequestPreviewPayload
-    ) -> tuple[Warehouse, list[dict[str, Any]]]:
-        """Core calculation logic for Gross, Remaining, Net."""
+    ) -> tuple[Warehouse, list[dict[str, Any]], bool]:
+        """Core calculation logic for Gross, Remaining, Net.
+
+        Returns:
+            (ods_warehouse, result_skus, no_snapshot_found)
+
+        If a previous-day ODS snapshot exists, ``remaining`` is read from the
+        live inventory balance for each material and deducted from gross.
+        If **no snapshot exists** (first-time system setup or missed upload) the
+        method does *not* block — it sets ``remaining = 0`` for every material
+        and signals callers via ``no_snapshot_found = True``, which the API
+        surface can relay to the frontend as an informational banner.
+        """
         ods_warehouse = self._db.scalar(
             select(Warehouse).where(
                 Warehouse.public_id == payload.ods_warehouse_public_id
@@ -83,9 +91,8 @@ class RequestService:
                 f"Warehouse {payload.ods_warehouse_public_id} not found."
             )
 
-        # Mandatory daily inventory upload check (ODS uploads yesterday's closing inventory)
+        # --- Snapshot check (non-blocking) -----------------------------------
         from datetime import timedelta
-
         from app.domains.inventory.models import InventorySnapshot
 
         snapshot_date_required = payload.request_date - timedelta(days=1)
@@ -93,17 +100,19 @@ class RequestService:
             select(InventorySnapshot)
             .where(InventorySnapshot.warehouse_id == ods_warehouse.id)
             .where(InventorySnapshot.snapshot_date == snapshot_date_required)
+            .where(InventorySnapshot.is_active == True)
             .limit(1)
         )
-        if not snapshot_exists:
-            from app.core.errors import ValidationError
-
-            raise ValidationError(
-                f"ODS Inventory snapshot for {snapshot_date_required} is missing. "
-                "You must upload yesterday's ODS inventory before creating requests."
+        no_snapshot_found: bool = snapshot_exists is None
+        if no_snapshot_found:
+            logger.warning(
+                "no_ods_snapshot",
+                warehouse_id=ods_warehouse.id,
+                snapshot_date=str(snapshot_date_required),
+                message="No prior ODS snapshot found — proceeding with zero remaining inventory.",
             )
 
-        # First pass: Resolve SKUs, BOMs and fetch ODS balance once per material
+        # --- First pass: Resolve SKUs, BOMs and fetch ODS balance once per material ---
         material_totals: dict[int, dict[str, Any]] = {}
         sku_records = []
 
@@ -124,13 +133,25 @@ class RequestService:
             for bom_item in bom_version.items:
                 mat = bom_item.material
                 if mat.id not in material_totals:
-                    remaining = self._inventory.get_balance(mat.id, ods_warehouse.id)
+                    # Use snapshot balance when a snapshot exists; zero otherwise.
+                    if no_snapshot_found:
+                        remaining = Decimal("0")
+                    else:
+                        snapshot = self._db.scalar(
+                            select(InventorySnapshot.closing_balance)
+                            .where(InventorySnapshot.warehouse_id == ods_warehouse.id)
+                            .where(InventorySnapshot.material_id == mat.id)
+                            .where(InventorySnapshot.snapshot_date == snapshot_date_required)
+                            .where(InventorySnapshot.is_active == True)
+                        )
+                        remaining = snapshot if snapshot is not None else Decimal("0")
+                        
                     material_totals[mat.id] = {
                         "material": mat,
                         "remaining": remaining,
                     }
 
-        # Second pass: Apportion remaining balance greedily across SKUs
+        # --- Second pass: Apportion remaining balance greedily across SKUs ---
         result_skus: list[dict[str, Any]] = []
         for rec in sku_records:
             sku: SKU | None = rec["sku"]  # type: ignore
@@ -164,11 +185,16 @@ class RequestService:
                 )
             result_skus.append(sku_data)
 
-        return ods_warehouse, result_skus
+        return ods_warehouse, result_skus, no_snapshot_found
 
     def preview_request(self, payload: RequestPreviewPayload) -> RequestPreviewOut:
-        """Preview material requirements based on active BOM and current ODS stock."""
-        ods_warehouse, result_skus = self._calculate_request_skus(payload)
+        """Preview material requirements based on active BOM and current ODS stock.
+
+        When no previous-day ODS snapshot exists the preview proceeds with
+        remaining = 0 (full BOM quantities) and includes no_snapshot_found=True
+        so the frontend can display an informational first-run banner.
+        """
+        ods_warehouse, result_skus, no_snapshot_found = self._calculate_request_skus(payload)
 
         out_skus = []
         for sku_data in result_skus:
@@ -201,13 +227,17 @@ class RequestService:
                 )
             )
 
-        return RequestPreviewOut(skus=out_skus)
+        return RequestPreviewOut(skus=out_skus, no_snapshot_found=no_snapshot_found)
 
     def create_request(
         self, payload: CreateRequestPayload, *, created_by: int
     ) -> MaterialRequest:
-        """Create a SUBMITTED material request with calculated net quantities."""
-        ods_warehouse, result_skus = self._calculate_request_skus(payload)
+        """Create a SUBMITTED material request with calculated net quantities.
+
+        Works the same whether or not a previous-day ODS snapshot exists;
+        if no snapshot is present, remaining = 0 and full BOM quantities are requested.
+        """
+        ods_warehouse, result_skus, _no_snapshot = self._calculate_request_skus(payload)
 
         request = MaterialRequest(
             request_date=payload.request_date,
@@ -244,6 +274,21 @@ class RequestService:
                 self._db.add(req_item)
 
         self._db.flush()
+        
+        request.request_number = f"MR-{request.request_date.year}-{request.id:06d}"
+        
+        from app.domains.requests.models import MaterialRequestHistory
+        
+        history = MaterialRequestHistory(
+            request_id=request.id,
+            user_id=created_by,
+            previous_status="DRAFT",
+            new_status="SUBMITTED",
+            action="CREATED"
+        )
+        self._db.add(history)
+        self._db.flush()
+        
         logger.info("request_created", request_id=request.id, created_by=created_by)
         return request
 
@@ -251,111 +296,33 @@ class RequestService:
     # State transitions
     # ------------------------------------------------------------------
 
-    def dispatch_request(
-        self, request_id: int, *, dispatched_by: int
-    ) -> MaterialRequest:
-        """Transition request from APPROVED/PARTIALLY_APPROVED -> DISPATCHED."""
-        request = self._get_request(request_id)
-        _assert_transition(request.status, "DISPATCHED")
-        request.status = "DISPATCHED"
-        request.version += 1
-        request.updated_by = dispatched_by
-
-        for sku_line in request.skus:
-            for item in sku_line.items:
-                if item.approved_qty and item.approved_qty > 0:
-                    item.dispatched_qty = item.approved_qty
-                    item.version += 1
-                    item.updated_by = dispatched_by
-
-                    assert request.rmpm_warehouse_id is not None, "RMPM warehouse must be set for dispatch"
-
-                    self._inventory.dispatch_transfer(
-                        material_id=item.material_id,
-                        source_warehouse_id=request.rmpm_warehouse_id,
-                        quantity=item.dispatched_qty,
-                        reference_type="MATERIAL_REQUEST",
-                        reference_id=request.id,
-                        dispatched_by=dispatched_by,
-                    )
-
-                    self._inventory.release_reservation(
-                        material_id=item.material_id,
-                        source_warehouse_id=request.rmpm_warehouse_id,
-                        quantity=item.dispatched_qty,
-                        reference_type="MATERIAL_REQUEST",
-                        reference_id=request.id,
-                        released_by=dispatched_by,
-                    )
-
-        self._db.flush()
-        logger.info("request_dispatched", request_id=request_id)
-        return request
-
-    def receive_request(self, request_id: int, *, received_by: int) -> MaterialRequest:
-        """Transition request from DISPATCHED -> RECEIVED."""
-        request = self._get_request(request_id)
-        _assert_transition(request.status, "RECEIVED")
-        request.status = "RECEIVED"
-        request.version += 1
-        request.updated_by = received_by
-
-        for sku_line in request.skus:
-            for item in sku_line.items:
-                if item.dispatched_qty and item.dispatched_qty > 0:
-                    item.received_qty = item.dispatched_qty
-                    item.version += 1
-                    item.updated_by = received_by
-
-                    self._inventory.receive_transfer(
-                        material_id=item.material_id,
-                        destination_warehouse_id=request.ods_warehouse_id,
-                        quantity=item.received_qty,
-                        reference_type="MATERIAL_REQUEST",
-                        reference_id=request.id,
-                        received_by=received_by,
-                    )
-
-        self._db.flush()
-        logger.info("request_received", request_id=request_id)
-        return request
-
-    def close_request(self, request_id: int, *, closed_by: int) -> MaterialRequest:
-        """Transition request from RECEIVED -> CLOSED.
-
-        This signifies production is complete. All received materials are
-        consumed from the ODS warehouse.
-        """
-        request = self._get_request(request_id)
-        _assert_transition(request.status, "CLOSED")
-        request.status = "CLOSED"
-        request.version += 1
-        request.updated_by = closed_by
-
-        # Trigger consumption from ODS ledger
-        for sku_line in request.skus:
-            for item in sku_line.items:
-                if item.received_qty and item.received_qty > 0:
-                    self._inventory.consume(
-                        material_id=item.material_id,
-                        source_warehouse_id=request.ods_warehouse_id,
-                        quantity=item.received_qty,
-                        reference_type="MATERIAL_REQUEST",
-                        reference_id=request.id,
-                        consumed_by=closed_by,
-                    )
-
-        self._db.flush()
-        logger.info("request_closed", request_id=request_id)
-        return request
-
     def reject_request(self, request_id: int, *, rejected_by: int) -> MaterialRequest:
-        """Transition request to REJECTED."""
-        request = self._get_request(request_id)
+        prev = request.status
         _assert_transition(request.status, "REJECTED")
         request.status = "REJECTED"
         request.version += 1
         request.updated_by = rejected_by
+        
+        from app.domains.requests.models import MaterialRequestHistory
+        from app.domains.audit.models import Notification
+        
+        history = MaterialRequestHistory(
+            request_id=request.id,
+            user_id=rejected_by,
+            previous_status=prev,
+            new_status="REJECTED",
+            action="REJECTED"
+        )
+        self._db.add(history)
+        
+        notif = Notification(
+            user_id=request.created_by,
+            message=f"Request {request.request_number or request.public_id} was rejected.",
+            link=f"/requests/{request.public_id}",
+            type="REQUEST_REJECTED"
+        )
+        self._db.add(notif)
+        
         self._db.flush()
         logger.info("request_rejected", request_id=request_id)
         return request
@@ -439,10 +406,32 @@ class RequestService:
                 reserved_by=approved_by,
             )
 
-        request.status = "PARTIALLY_APPROVED" if is_partial else "APPROVED"
+        prev = request.status
+        request.status = "APPROVED"
         request.approved_by = approved_by
         request.version += 1
         request.updated_by = approved_by
+        
+        from app.domains.requests.models import MaterialRequestHistory
+        from app.domains.audit.models import Notification
+        
+        history = MaterialRequestHistory(
+            request_id=request.id,
+            user_id=approved_by,
+            previous_status=prev,
+            new_status="APPROVED",
+            action="APPROVED"
+        )
+        self._db.add(history)
+        
+        notif = Notification(
+            user_id=request.created_by,
+            message=f"Request {request.request_number or request.public_id} was approved.",
+            link=f"/requests/{request.public_id}",
+            type="REQUEST_APPROVED"
+        )
+        self._db.add(notif)
+        
         self._db.flush()
 
         logger.info(

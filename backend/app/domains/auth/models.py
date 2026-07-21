@@ -101,6 +101,10 @@ class User(AuditedModel):
     role_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
     )
+    warehouse_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=True,
+        comment="Primary warehouse assignment for inventory operations."
+    )
     failed_login_count: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -114,6 +118,7 @@ class User(AuditedModel):
     )
 
     role: Mapped["Role"] = relationship("Role", back_populates="users")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
     refresh_sessions: Mapped[list["RefreshSession"]] = relationship(
         "RefreshSession", back_populates="user", cascade="all, delete-orphan"
     )

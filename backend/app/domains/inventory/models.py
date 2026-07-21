@@ -103,7 +103,8 @@ class InventorySnapshot(AuditedModel):
             "material_id",
             "warehouse_id",
             "snapshot_date",
-            name="uq_inv_snapshot_mat_wh_date",
+            "version",
+            name="uq_inv_snapshot_mat_wh_date_ver",
         ),
         CheckConstraint("closing_balance >= 0", name="ck_inv_snapshot_balance_non_neg"),
         Index("ix_inv_snapshot_material_warehouse", "material_id", "warehouse_id"),
@@ -127,4 +128,16 @@ class InventorySnapshot(AuditedModel):
         nullable=False,
         default=Decimal("0.0000"),
         comment="Quantity currently reserved but not yet dispatched.",
+    )
+    version: Mapped[int] = mapped_column(
+        nullable=False,
+        default=1,
+        server_default="1",
+        comment="Version number for audit trail.",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="True if this is the active operational snapshot.",
     )

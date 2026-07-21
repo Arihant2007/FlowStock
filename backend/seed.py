@@ -38,6 +38,9 @@ from app.domains.master.models import (
     Warehouse,
 )
 from app.domains.settings.models import Setting
+from app.domains.audit.models import AuditLog, BusinessEventLog
+from app.domains.inventory.models import InventoryTransaction, InventorySnapshot
+from app.domains.requests.models import MaterialRequest, MaterialRequestSKU, MaterialRequestItem
 from app.infrastructure.base_model import Base
 from app.infrastructure.database import SessionLocal, engine
 
@@ -188,47 +191,75 @@ def seed(db: Session) -> None:  # noqa: C901
     db.flush()
 
     print("Seeding material classifications...")
-    cat = db.query(MaterialCategory).filter_by(name="General").first()
-    if not cat:
-        cat = MaterialCategory(name="General")
-        db.add(cat)
-        db.flush()
+    import json
+    rules_path = os.path.join(os.path.dirname(__file__), "app", "core", "classification_rules.json")
+    with open(rules_path, "r") as f:
+        rules = json.load(f)
 
-    rm_type = db.query(MaterialType).filter_by(name="RM").first()
-    if not rm_type:
-        rm_type = MaterialType(name="RM")
-        db.add(rm_type)
-        db.flush()
+    categories = set(["Raw Material", "Packaging Material", "Others", "General"])
+    types = set(["RM", "PM"])
+    groups = set(["Ingredients", "Laminates", "Films", "Cartons", "Pouches", "Labels", "Others", "Default"])
 
-    pm_type = db.query(MaterialType).filter_by(name="PM").first()
-    if not pm_type:
-        pm_type = MaterialType(name="PM")
-        db.add(pm_type)
-        db.flush()
+    for rule in rules.get("prefix_rules", []):
+        if "category" in rule:
+            categories.add(rule["category"])
+        if "type" in rule:
+            types.add(rule["type"])
+    for rule in rules.get("keyword_rules", []):
+        if "group" in rule:
+            groups.add(rule["group"])
+    if "defaults" in rules:
+        if "category" in rules["defaults"]:
+            categories.add(rules["defaults"]["category"])
+        if "type" in rules["defaults"]:
+            types.add(rules["defaults"]["type"])
+        if "group" in rules["defaults"]:
+            groups.add(rules["defaults"]["group"])
 
-    grp = db.query(MaterialGroup).filter_by(name="Default").first()
-    if not grp:
-        grp = MaterialGroup(name="Default")
-        db.add(grp)
-        db.flush()
+    cat_map = {}
+    for c_name in categories:
+        cat = db.query(MaterialCategory).filter_by(name=c_name).first()
+        if not cat:
+            cat = MaterialCategory(name=c_name)
+            db.add(cat)
+            db.flush()
+        cat_map[c_name] = cat
+
+    type_map = {}
+    for t_name in types:
+        mtype = db.query(MaterialType).filter_by(name=t_name).first()
+        if not mtype:
+            mtype = MaterialType(name=t_name)
+            db.add(mtype)
+            db.flush()
+        type_map[t_name] = mtype
+
+    group_map = {}
+    for g_name in groups:
+        grp = db.query(MaterialGroup).filter_by(name=g_name).first()
+        if not grp:
+            grp = MaterialGroup(name=g_name)
+            db.add(grp)
+            db.flush()
+        group_map[g_name] = grp
 
     print("Seeding sample materials...")
     mat_defs = [
-        ("RM-001", "Wheat Flour", "kg", rm_type.id),
-        ("RM-002", "Edible Oil", "L", rm_type.id),
-        ("PM-001", "Cardboard Box 500g", "units", pm_type.id),
+        ("RM-001", "Wheat Flour", "kg", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("RM-002", "Edible Oil", "L", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("PM-001", "Cardboard Box 500g", "units", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Cartons"].id),
     ]
     mat_map: dict[str, Material] = {}
-    for code, name, uom, type_id in mat_defs:
+    for code, name, uom, cat_id, type_id, group_id in mat_defs:
         m = db.query(Material).filter_by(code=code).first()
         if not m:
             m = Material(
                 code=code,
                 name=name,
                 uom=uom,
-                category_id=cat.id,
+                category_id=cat_id,
                 type_id=type_id,
-                group_id=grp.id,
+                group_id=group_id,
             )
             db.add(m)
             db.flush()

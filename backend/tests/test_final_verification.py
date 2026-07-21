@@ -62,22 +62,26 @@ def test_snapshot_date_validation(db):
         skus=[RequestSKUInput(sku_public_id=data["sku1"].public_id, planned_production_qty=Decimal("10"))]
     )
 
-    # 1. Missing snapshot should fail
-    with pytest.raises(ValidationError, match="snapshot for .* is missing"):
-        svc.create_request(payload, created_by=1)
+    # 1. Missing snapshot should succeed with remaining=0
+    req1 = svc.create_request(payload, created_by=1)
+    assert req1.status == "SUBMITTED"
+    assert req1.skus[0].items[0].remaining_from_previous_day == Decimal("0")
 
-    # 2. Today's snapshot should fail (it expects yesterday's)
+    # 2. Today's snapshot should also succeed with remaining=0 (it expects yesterday's)
     db.add(InventorySnapshot(material_id=data["mat"].id, warehouse_id=data["ods"].id, snapshot_date=today, closing_balance=Decimal("10"), created_by=1))
     db.flush()
-    with pytest.raises(ValidationError, match="snapshot for .* is missing"):
-        svc.create_request(payload, created_by=1)
+    req2 = svc.create_request(payload, created_by=1)
+    assert req2.status == "SUBMITTED"
+    assert req2.skus[0].items[0].remaining_from_previous_day == Decimal("0")
 
-    # 3. Yesterday's snapshot should succeed
+    # 3. Yesterday's snapshot should succeed and use the remaining balance
     db.add(InventorySnapshot(material_id=data["mat"].id, warehouse_id=data["ods"].id, snapshot_date=yesterday, closing_balance=Decimal("10"), created_by=1))
+    db.add(InventoryTransaction(material_id=data["mat"].id, destination_warehouse_id=data["ods"].id, transaction_type="RECEIPT", quantity=Decimal("10"), created_by=1))
     db.flush()
 
-    req = svc.create_request(payload, created_by=1)
-    assert req.status == "SUBMITTED"
+    req3 = svc.create_request(payload, created_by=1)
+    assert req3.status == "SUBMITTED"
+    assert req3.skus[0].items[0].remaining_from_previous_day == Decimal("10")
 
 def test_aggregation_and_lifecycle(db):
     data = setup_master_data(db)
@@ -133,24 +137,60 @@ def test_aggregation_and_lifecycle(db):
     # 1000 receipt - 50 reservation = 950
     assert bal == Decimal("950.0000")
 
-    # DISPATCH
-    req = svc.dispatch_request(req.id, dispatched_by=1)
-    assert req.status == "DISPATCHED"
+    # Check History & Notification
+    from app.domains.requests.models import MaterialRequestHistory
+    from app.domains.audit.models import Notification
+    histories = db.query(MaterialRequestHistory).filter_by(request_id=req.id).all()
+    assert len(histories) == 2  # CREATED, APPROVED
+    
+    notifs = db.query(Notification).filter_by(user_id=1).all()
+    assert len(notifs) >= 1
+    assert any(n.type == "REQUEST_APPROVED" for n in notifs)
 
-    # Check ledger for double deduction bug fix
-    bal = inv.get_balance(material_id=data["mat"].id, warehouse_id=data["rmpm"].id)
-    # The dispatch should have released the 50 reservation (+50) and then done a TRANSFER_OUT (-50)
-    # Balance should still be 950!
-    assert bal == Decimal("950.0000")
-
-    # RECEIVE
-    req = svc.receive_request(req.id, received_by=1)
-    assert req.status == "RECEIVED"
-
-    # ODS balance should have increased by 50 (100 opening + 50 received)
-    ods_bal = inv.get_balance(material_id=data["mat"].id, warehouse_id=data["ods"].id)
-    assert ods_bal == Decimal("150.0000") # transfer in 50
-
-    # CLOSE
-    req = svc.close_request(req.id, closed_by=1)
-    assert req.status == "CLOSED"
+def test_atomic_rollback_on_approval_failure(db):
+    data = setup_master_data(db)
+    svc = RequestService(db)
+    today = datetime.date.today()
+    
+    # Give RMPM 0 kg of Potato (will fail reservation)
+    # create request
+    payload = CreateRequestPayload(
+        request_date=today,
+        ods_warehouse_public_id=data["ods"].public_id,
+        skus=[
+            RequestSKUInput(sku_public_id=data["sku1"].public_id, planned_production_qty=Decimal("10")),
+        ]
+    )
+    req = svc.create_request(payload, created_by=1)
+    
+    from app.domains.requests.schemas import ApproveRequestPayload
+    from app.core.errors import InsufficientInventoryError
+    
+    approve_payload = ApproveRequestPayload(
+        rmpm_warehouse_public_id=data["rmpm"].public_id,
+        items=[{"material_public_id": data["mat"].public_id, "approved_qty": Decimal("50")}]
+    )
+    
+    # Use a savepoint to simulate a transaction failure
+    savepoint = db.begin_nested()
+    try:
+        svc.approve_request(req.id, approve_payload, approved_by=1, rmpm_warehouse_id=data["rmpm"].id)
+    except InsufficientInventoryError:
+        savepoint.rollback()
+    
+    # Verify rollback: status is still SUBMITTED, no APPROVED history, no Notification
+    from app.domains.requests.models import MaterialRequest, MaterialRequestHistory
+    from app.domains.audit.models import Notification
+    from app.domains.inventory.models import InventoryTransaction
+    
+    req_db = db.query(MaterialRequest).get(req.id)
+    assert req_db.status == "SUBMITTED"
+    
+    histories = db.query(MaterialRequestHistory).filter_by(request_id=req.id, action="APPROVED").all()
+    assert len(histories) == 0
+    
+    notifs = db.query(Notification).filter_by(type="REQUEST_APPROVED").all()
+    assert len(notifs) == 0
+    
+    reservations = db.query(InventoryTransaction).filter_by(reference_type="MATERIAL_REQUEST", reference_id=req.id).all()
+    assert len(reservations) == 0

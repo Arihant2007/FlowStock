@@ -60,4 +60,28 @@ export const inventoryApi = {
     )
     return data
   },
+
+  getVarianceReport: async (params: {
+    page?: number
+    page_size?: number
+    warehouse_public_id?: string
+    snapshot_date?: string
+  } = {}) => {
+    const { data } = await client.get('/inventory/variance-report', {
+      params: { page: 1, page_size: 50, ...params },
+    })
+    return data
+  },
+
+  exportVarianceReport: async (params: {
+    format?: 'excel' | 'csv'
+    warehouse_public_id?: string
+    snapshot_date?: string
+  } = {}) => {
+    const res = await client.get('/inventory/variance-report/export', {
+      params,
+      responseType: 'blob',
+    })
+    return res
+  },
 }

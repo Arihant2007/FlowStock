@@ -11,26 +11,26 @@ import { Badge } from '@/components/ui/badge'
 import { Pagination } from '@/components/ui/pagination'
 import { ConfirmDialog } from '@/components/ui/alert-dialog'
 import { getErrorMessage, formatDate } from '@/lib/utils'
-import { Package, Trash2, Upload } from 'lucide-react'
+import { Package, Archive, Upload } from 'lucide-react'
 
 export function MaterialsPage() {
   const { hasPermission } = useAuth()
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
-  const [deleteTarget, setDeleteTarget] = useState<string | undefined>()
-  const [deleteName, setDeleteName] = useState('')
+  const [archiveTarget, setArchiveTarget] = useState<string | undefined>()
+  const [archiveName, setArchiveName] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['master', 'materials', page],
     queryFn: () => masterApi.listMaterials(page),
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => masterApi.deleteMaterial(id),
+  const archiveMutation = useMutation({
+    mutationFn: (id: string) => masterApi.archiveMaterial(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['master', 'materials'] })
-      toast.success('Material deleted.')
-      setDeleteTarget(undefined)
+      toast.success('Material archived.')
+      setArchiveTarget(undefined)
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   })
@@ -83,11 +83,12 @@ export function MaterialsPage() {
                   <Td>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-destructive hover:text-destructive"
-                      onClick={() => { setDeleteTarget(m.public_id); setDeleteName(m.name) }}
+                      size="sm"
+                      className="text-muted-foreground hover:text-foreground flex items-center gap-1.5"
+                      onClick={() => { setArchiveTarget(m.public_id); setArchiveName(m.name) }}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Archive className="h-3.5 w-3.5" />
+                      <span>Archive</span>
                     </Button>
                   </Td>
                 )}
@@ -107,13 +108,13 @@ export function MaterialsPage() {
       </Card>
 
       <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(v) => !v && setDeleteTarget(undefined)}
-        title="Delete Material"
-        description={`Are you sure you want to delete "${deleteName}"? This cannot be undone.`}
-        confirmLabel="Delete"
-        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
-        isLoading={deleteMutation.isPending}
+        open={!!archiveTarget}
+        onOpenChange={(v) => !v && setArchiveTarget(undefined)}
+        title="Archive Material"
+        description={`Are you sure you want to archive "${archiveName}"? This will hide it from new selections but preserve historical data.`}
+        confirmLabel="Archive"
+        onConfirm={() => archiveTarget && archiveMutation.mutate(archiveTarget)}
+        isLoading={archiveMutation.isPending}
       />
     </div>
   )
