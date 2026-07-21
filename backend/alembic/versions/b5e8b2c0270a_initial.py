@@ -60,7 +60,7 @@ def upgrade() -> None:
     sa.Column('event_type', sa.String(length=100), nullable=False),
     sa.Column('reference_type', sa.String(length=100), nullable=True),
     sa.Column('reference_id', sa.BigInteger(), nullable=True),
-    sa.Column('payload', postgresql.JSONB(astext_type=Text()), nullable=False),
+    sa.Column('payload', sa.JSON(), nullable=False),
     sa.Column('triggered_by', sa.BigInteger(), nullable=True),
     sa.Column('id', sa.BigInteger().with_variant(sa.Integer(), 'sqlite'), autoincrement=True, nullable=False),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),

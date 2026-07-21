@@ -8,6 +8,7 @@ import type {
   BOMVersionOut,
   BOMUploadPreview,
   MaterialUploadPreview,
+  DashboardStatsOut,
 } from '@/types/api'
 
 // ─── Warehouses ───────────────────────────────────────────────────────────────
@@ -204,13 +205,7 @@ export const masterApi = {
   },
 
   getDashboardStats: async () => {
-    const { data } = await client.get<ApiResponse<{
-      total_materials: number;
-      total_skus: number;
-      total_bom_versions: number;
-      total_bom_items: number;
-      last_import_at: string | null;
-    }>>('/master/dashboard/stats')
+    const { data } = await client.get<ApiResponse<DashboardStatsOut>>('/master/dashboard/stats')
     return data
   },
 }

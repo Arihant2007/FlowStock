@@ -282,15 +282,13 @@ export function NewRequestPage() {
                         </p>
                       </div>
                       <Button
-                        asChild
                         variant="outline"
                         size="sm"
                         className="border-amber-400 text-amber-700 hover:bg-amber-100"
+                        onClick={() => navigate('/master/boms/upload')}
                       >
-                        <Link to="/master/bom-upload">
-                          <FileSpreadsheet className="h-4 w-4 mr-2" />
-                          Go to BOM Upload
-                        </Link>
+                        <FileSpreadsheet className="h-4 w-4 mr-2" />
+                        Go to BOM Upload
                       </Button>
                     </div>
                   ) : (

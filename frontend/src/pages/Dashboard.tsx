@@ -235,7 +235,9 @@ export function DashboardPage() {
               >
                 {recentImports.map((i: any) => (
                   <Tr key={i.public_id}>
-                    <Td className="font-medium truncate max-w-[150px]" title={i.filename}>{i.filename}</Td>
+                    <Td className="font-medium truncate max-w-[150px]">
+                      <span title={i.filename}>{i.filename}</span>
+                    </Td>
                     <Td><Badge label={i.status} variant="status" /></Td>
                     <Td className="text-muted-foreground">{formatDateTime(i.created_at)}</Td>
                     <Td className="text-right">

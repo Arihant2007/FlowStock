@@ -772,7 +772,7 @@ class MasterService:
             # Calculate inventory health (variance counts)
             from app.domains.inventory.service import InventoryService
             inventory_svc = InventoryService(self._db)
-            variances = inventory_svc.get_variance_report(target_date=latest_snapshot.snapshot_date)
+            variances = inventory_svc.get_variance_report(snapshot_date=latest_snapshot.snapshot_date)
             
             matched_count = 0
             variance_count = 0

@@ -40,7 +40,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Override sqlalchemy.url with the environment variable if present.
-database_url = os.environ.get("DATABASE_URL")
+from app.core.config import get_settings
+database_url = get_settings().database_url
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 

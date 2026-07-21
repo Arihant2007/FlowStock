@@ -249,6 +249,8 @@ class BOMUploadPreview(BaseModel):
 class BOMUploadSessionOut(BaseModel):
     """Serialized BOM upload session history."""
 
+    model_config = {"from_attributes": True}
+
     public_id: uuid.UUID
     filename: str
     status: str

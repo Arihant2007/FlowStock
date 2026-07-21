@@ -265,11 +265,13 @@ export function RMPMRequestDetailPage() {
                 {sku.items.map((item) => {
                   let statusLabel = ''
                   let statusColor = ''
+                  const approved = Number(item.approved_qty || 0)
+                  const requested = Number(item.requested_qty || 0)
                   if (!isPendingApprove) {
-                    if (item.approved_qty >= item.requested_qty) {
+                    if (approved >= requested) {
                       statusLabel = 'Available'
                       statusColor = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                    } else if (item.approved_qty > 0) {
+                    } else if (approved > 0) {
                       statusLabel = 'Partial'
                       statusColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
                     } else {
@@ -279,7 +281,7 @@ export function RMPMRequestDetailPage() {
                   }
                   
                   return (
-                  <Tr key={item.public_id} className={!isPendingApprove && item.approved_qty < item.requested_qty ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
+                  <Tr key={item.public_id} className={!isPendingApprove && approved < requested ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
                     <Td>
                       <div className="font-medium">{item.material_name}</div>
                       <div className="text-xs text-muted-foreground">{item.material_code}</div>

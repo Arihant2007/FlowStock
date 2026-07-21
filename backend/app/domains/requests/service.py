@@ -42,7 +42,11 @@ logger = get_logger(__name__)
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "DRAFT": {"SUBMITTED"},
-    "SUBMITTED": {"APPROVED", "REJECTED"},
+    "SUBMITTED": {"APPROVED", "PARTIALLY_APPROVED", "REJECTED"},
+    "APPROVED": {"DISPATCHED"},
+    "PARTIALLY_APPROVED": {"DISPATCHED"},
+    "DISPATCHED": {"RECEIVED"},
+    "RECEIVED": {"CLOSED"},
 }
 
 
@@ -297,6 +301,7 @@ class RequestService:
     # ------------------------------------------------------------------
 
     def reject_request(self, request_id: int, *, rejected_by: int) -> MaterialRequest:
+        request = self._get_request(request_id)
         prev = request.status
         _assert_transition(request.status, "REJECTED")
         request.status = "REJECTED"
@@ -440,6 +445,139 @@ class RequestService:
             status=request.status,
             approved_by=approved_by,
         )
+        return request
+
+    # ------------------------------------------------------------------
+    # Dispatch / Receive / Close
+    # ------------------------------------------------------------------
+
+    def dispatch_request(self, request_id: int, *, dispatched_by: int) -> MaterialRequest:
+        """Transition APPROVED/PARTIALLY_APPROVED → DISPATCHED.
+
+        Records a TRANSFER_OUT from RMPM to ODS for each approved material line
+        and creates a history entry.
+        """
+        request = self._get_request(request_id)
+        _assert_transition(request.status, "DISPATCHED")
+        prev = request.status
+
+        # Record inventory transfer out from RMPM for each approved item
+        if request.rmpm_warehouse_id:
+            for sku_line in request.skus:
+                for item in sku_line.items:
+                    if item.approved_qty and item.approved_qty > 0:
+                        self._inventory.transfer(
+                            material_id=item.material_id,
+                            source_warehouse_id=request.rmpm_warehouse_id,
+                            destination_warehouse_id=request.ods_warehouse_id,
+                            quantity=item.approved_qty,
+                            reference_type="MATERIAL_REQUEST",
+                            reference_id=request.id,
+                            transferred_by=dispatched_by,
+                        )
+                        item.dispatched_qty = item.approved_qty
+                        item.version += 1
+                        item.updated_by = dispatched_by
+
+        request.status = "DISPATCHED"
+        request.version += 1
+        request.updated_by = dispatched_by
+
+        from app.domains.requests.models import MaterialRequestHistory
+        from app.domains.audit.models import Notification
+
+        self._db.add(
+            MaterialRequestHistory(
+                request_id=request.id,
+                user_id=dispatched_by,
+                previous_status=prev,
+                new_status="DISPATCHED",
+                action="DISPATCHED",
+            )
+        )
+        self._db.add(
+            Notification(
+                user_id=request.created_by,
+                message=f"Request {request.request_number or request.public_id} has been dispatched.",
+                link=f"/requests/{request.public_id}",
+                type="REQUEST_DISPATCHED",
+            )
+        )
+        self._db.flush()
+        logger.info("request_dispatched", request_id=request_id, dispatched_by=dispatched_by)
+        return request
+
+    def receive_request(self, request_id: int, *, received_by: int) -> MaterialRequest:
+        """Transition DISPATCHED → RECEIVED.
+
+        Records a RECEIPT into the ODS warehouse for each dispatched item
+        and creates a history entry.
+        """
+        request = self._get_request(request_id)
+        _assert_transition(request.status, "RECEIVED")
+        prev = request.status
+
+        for sku_line in request.skus:
+            for item in sku_line.items:
+                if item.dispatched_qty and item.dispatched_qty > 0:
+                    item.received_qty = item.dispatched_qty
+                    item.version += 1
+                    item.updated_by = received_by
+
+        request.status = "RECEIVED"
+        request.version += 1
+        request.updated_by = received_by
+
+        from app.domains.requests.models import MaterialRequestHistory
+        from app.domains.audit.models import Notification
+
+        self._db.add(
+            MaterialRequestHistory(
+                request_id=request.id,
+                user_id=received_by,
+                previous_status=prev,
+                new_status="RECEIVED",
+                action="RECEIVED",
+            )
+        )
+        self._db.add(
+            Notification(
+                user_id=request.created_by,
+                message=f"Request {request.request_number or request.public_id} has been received.",
+                link=f"/requests/{request.public_id}",
+                type="REQUEST_RECEIVED",
+            )
+        )
+        self._db.flush()
+        logger.info("request_received", request_id=request_id, received_by=received_by)
+        return request
+
+    def close_request(self, request_id: int, *, closed_by: int) -> MaterialRequest:
+        """Transition RECEIVED → CLOSED.
+
+        Final terminal state indicating all materials have been consumed.
+        """
+        request = self._get_request(request_id)
+        _assert_transition(request.status, "CLOSED")
+        prev = request.status
+
+        request.status = "CLOSED"
+        request.version += 1
+        request.updated_by = closed_by
+
+        from app.domains.requests.models import MaterialRequestHistory
+
+        self._db.add(
+            MaterialRequestHistory(
+                request_id=request.id,
+                user_id=closed_by,
+                previous_status=prev,
+                new_status="CLOSED",
+                action="CLOSED",
+            )
+        )
+        self._db.flush()
+        logger.info("request_closed", request_id=request_id, closed_by=closed_by)
         return request
 
     # ------------------------------------------------------------------

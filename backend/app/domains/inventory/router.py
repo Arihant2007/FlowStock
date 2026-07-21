@@ -42,7 +42,7 @@ router = APIRouter(prefix="/inventory", tags=["Inventory"])
 async def preview_opening_balance(
     file: UploadFile,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("inventory:upload")),
+    current_user: User = Depends(require_permission("inventory:upload")),
 ) -> dict:
     """Parse an opening balance Excel file and return a row-by-row validation preview.
 

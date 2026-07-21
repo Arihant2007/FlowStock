@@ -29,7 +29,7 @@ export function VarianceReportPage() {
         snapshot_date: snapshotDate || undefined,
         format: 'excel'
       })
-      const exportDate = snapshotDate || formatDate(new Date(), 'yyyy-MM-dd')
+      const exportDate = snapshotDate || formatDate(new Date().toISOString(), 'yyyy-MM-dd')
       downloadBlob(res.data as any, `Variance_Report_${exportDate}.xlsx`)
     } catch (err) {
       toast.error(getErrorMessage(err))

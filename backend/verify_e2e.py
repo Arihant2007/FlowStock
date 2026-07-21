@@ -62,6 +62,25 @@ client = TestClient(app)
 
 from app.domains.auth.dependencies import get_current_user
 
+class MockPermissionObj:
+    def __init__(self, code):
+        self.code = code
+
+class MockRolePermission:
+    def __init__(self, code):
+        self.permission = MockPermissionObj(code)
+
+class MockRole:
+    name = "admin"
+    permissions = [
+        MockRolePermission("master:write"),
+        MockRolePermission("master:read"),
+        MockRolePermission("inventory:upload"),
+        MockRolePermission("inventory:read"),
+        MockRolePermission("requests:write"),
+        MockRolePermission("requests:read"),
+    ]
+
 class MockUser:
     id = 1
     public_id = uuid.uuid4()
@@ -69,6 +88,7 @@ class MockUser:
     email = "admin@itc.in"
     full_name = "Admin"
     role_id = 1
+    role = MockRole()
     is_active = True
     created_at = datetime.datetime.now()
     updated_at = None

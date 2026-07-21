@@ -42,6 +42,24 @@ export interface UserOut {
   permissions: string[]
 }
 
+export interface DashboardStatsOut {
+  total_materials: number
+  total_skus: number
+  total_bom_versions: number
+  total_bom_items: number
+  last_import_at: string | null
+  inventory_upload?: {
+    total_materials: number
+    matched_count: number
+    variance_count: number
+    snapshot_date: string | null
+    warehouse_name: string | null
+    version: number | null
+    uploaded_by: string | null
+    upload_time: string | null
+  }
+}
+
 // ─── Master ───────────────────────────────────────────────────────────────────
 
 export interface WarehouseOut {
@@ -119,7 +137,7 @@ export interface BOMUploadRowResult {
   sku_code: string
   material_code: string
   quantity_per_unit: string
-  status: 'valid' | 'error' | 'warning'
+  status: 'valid' | 'error' | 'warning' | 'pending_material'
   message: string
 }
 
@@ -134,6 +152,7 @@ export interface BOMUploadPreview {
   unknown_materials: string[]
   session_id?: string
   session_status?: string
+  pending_rows?: any[]
 }
 
 // ─── Material Master Upload ───────────────────────────────────────────────────
@@ -317,6 +336,7 @@ export interface RequestPreviewSKUOut {
 
 export interface RequestPreviewOut {
   skus: RequestPreviewSKUOut[]
+  no_snapshot_found?: boolean
 }
 
 export interface ApprovalItemInput {

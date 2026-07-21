@@ -43,6 +43,10 @@ REQUEST_STATUSES = (
     "DRAFT",
     "SUBMITTED",
     "APPROVED",
+    "PARTIALLY_APPROVED",
+    "DISPATCHED",
+    "RECEIVED",
+    "CLOSED",
     "REJECTED",
 )
 STATUS_CHECK = f"status IN ({', '.join(repr(s) for s in REQUEST_STATUSES)})"
@@ -218,4 +222,4 @@ class MaterialRequestItem(AuditedModel):
 
     @property
     def material_type(self):
-        return self.material.type.name if self.material and self.material.type else "RM"
+        return self.material.material_type.name if self.material and self.material.material_type else "RM"

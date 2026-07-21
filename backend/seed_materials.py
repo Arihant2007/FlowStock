@@ -17,12 +17,15 @@ def seed():
         grp = db.query(MaterialGroup).filter_by(name='Default').first()
         
         added = 0
+        seen = set()
         for i, row in df.iterrows():
             code = str(row.iloc[0]).strip()
             name = str(row.iloc[1]).strip()
             uom = str(row.iloc[3]).strip()
             
             if code == 'nan' or code == 'Material Code' or code == 'SKU Code' or not code:
+                continue
+            if code in seen:
                 continue
                 
             # If UOM is nan, default to 'KG'
@@ -33,6 +36,7 @@ def seed():
             if not mat:
                 m = Material(code=code, name=name, uom=uom, category_id=cat.id, type_id=typ.id, group_id=grp.id)
                 db.add(m)
+                seen.add(code)
                 added += 1
         db.commit()
         print(f"Added {added} materials.")
