@@ -1099,8 +1099,20 @@ class MasterService:
                 seen_codes.add(code)
 
             if status != "duplicate":
-                # Validate foreign keys
-                if not r["category"]:
+                # Validate fields and foreign keys
+                if not r["material_name"]:
+                    status = "error"
+                    message = "Material Name is required."
+                elif len(r["material_name"]) > 255:
+                    status = "error"
+                    message = "Material Name cannot exceed 255 characters."
+                elif not r["uom"]:
+                    status = "error"
+                    message = "UOM is required."
+                elif len(r["uom"]) > 50:
+                    status = "error"
+                    message = "UOM cannot exceed 50 characters."
+                elif not r["category"]:
                     status = "error"
                     message = "Category is required."
                 elif r["category"].lower() not in existing_cats:
@@ -1175,7 +1187,7 @@ class MasterService:
         if global_errors:
             raise ValidationError(global_errors[0])
 
-        existing_mats = {m.code: m for m in self._db.scalars(select(Material).where(Material.deleted_at.is_(None))).all()}
+        existing_mats = {m.code: m for m in self._db.scalars(select(Material)).all()}
         from app.domains.master.models import MaterialCategory, MaterialType, MaterialGroup
         existing_cats = {c.name.lower(): c for c in self._db.scalars(select(MaterialCategory)).all()}
         existing_types = {t.name.lower(): t for c in self._db.scalars(select(MaterialType)).all() for t in [c]}
@@ -1193,6 +1205,16 @@ class MasterService:
             if code in seen_codes:
                 raise ValidationError(f"Duplicate material code '{code}' in upload file.")
             seen_codes.add(code)
+
+            if not r["material_name"]:
+                raise ValidationError(f"Material Name is required (Row {r['row_number']}).")
+            if len(r["material_name"]) > 255:
+                raise ValidationError(f"Material Name cannot exceed 255 characters (Row {r['row_number']}).")
+                
+            if not r["uom"]:
+                raise ValidationError(f"UOM is required (Row {r['row_number']}).")
+            if len(r["uom"]) > 50:
+                raise ValidationError(f"UOM cannot exceed 50 characters (Row {r['row_number']}).")
 
             if not r["category"]:
                 raise ValidationError(f"Category is required (Row {r['row_number']}).")
@@ -1218,7 +1240,14 @@ class MasterService:
 
             if code in existing_mats:
                 mat = existing_mats[code]
-                if mat.name != r["material_name"] or mat.uom != r["uom"] or mat.category_id != cat_id or mat.type_id != type_id or mat.group_id != group_id:
+                
+                restored = False
+                if mat.deleted_at is not None:
+                    mat.deleted_at = None
+                    mat.deleted_by = None
+                    restored = True
+                
+                if restored or mat.name != r["material_name"] or mat.uom != r["uom"] or mat.category_id != cat_id or mat.type_id != type_id or mat.group_id != group_id:
                     mat.name = r["material_name"]
                     mat.uom = r["uom"]
                     mat.category_id = cat_id
@@ -1226,7 +1255,7 @@ class MasterService:
                     mat.group_id = group_id
                     
                     self._audit.log_action(
-                        action="MATERIAL_UPDATED",
+                        action="MATERIAL_RESTORED" if restored else "MATERIAL_UPDATED",
                         user_id=created_by,
                         resource_type="Material",
                         resource_id=mat.id,

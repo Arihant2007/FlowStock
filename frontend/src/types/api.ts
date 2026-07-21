@@ -40,6 +40,7 @@ export interface UserOut {
   is_active: boolean
   role_name: string
   permissions: string[]
+  must_change_password: boolean
 }
 
 export interface DashboardStatsOut {
@@ -347,4 +348,60 @@ export interface ApprovalItemInput {
 export interface ApproveRequestPayload {
   rmpm_warehouse_public_id: string
   items: ApprovalItemInput[]
+}
+
+// ─── Admin ────────────────────────────────────────────────────────────────────
+
+export interface UserListOut {
+  public_id: string
+  full_name: string
+  username: string
+  email: string
+  role_name: string
+  role_public_id: string
+  warehouse_name: string | null
+  warehouse_public_id: string | null
+  is_active: boolean
+  is_locked: boolean
+  must_change_password: boolean
+  last_login_at: string | null
+  created_at: string
+}
+
+export interface UserAdminOut {
+  public_id: string
+  full_name: string
+  username: string
+  email: string
+  role_name: string
+  role_public_id: string
+  warehouse_name: string | null
+  warehouse_public_id: string | null
+  is_active: boolean
+  is_locked: boolean
+  failed_login_count: number
+  locked_until: string | null
+  must_change_password: boolean
+  password_changed_at: string | null
+  last_login_at: string | null
+  created_at: string
+  updated_at: string | null
+  permissions: string[]
+}
+
+export interface RoleOut {
+  public_id: string
+  name: string
+}
+
+export interface ResetPasswordResponse {
+  temporary_password: string
+  message: string
+}
+
+export interface UserStats {
+  total: number
+  active: number
+  locked: number
+  admins: number
 }

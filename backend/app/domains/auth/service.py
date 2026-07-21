@@ -31,7 +31,7 @@ from app.domains.auth.repository import (
     RoleRepository,
     UserRepository,
 )
-from app.domains.auth.schemas import CreateUserRequest, TokenResponse
+from app.domains.auth.schemas import ChangePasswordRequest, CreateUserRequest, TokenResponse
 from app.domains.auth.security import (
     create_access_token,
     create_refresh_token,
@@ -96,6 +96,16 @@ class AuthService:
                 )
                 raise AccountLockedError(minutes_remaining=minutes_left)
 
+        # Check admin-imposed lock (is_locked flag — separate from auto-lockout).
+        if user is not None and user.is_locked:
+            self._audit.log_action(
+                action="LOGIN_BLOCKED_ADMIN_LOCK",
+                user_id=user.id,
+                ip_address=ip_address,
+                details={"identifier": identifier},
+            )
+            raise AccountLockedError(minutes_remaining=0)
+
         # Constant-time check: always call verify even if user not found to prevent
         # timing attacks that reveal whether a username/email exists.
         password_valid = (
@@ -120,6 +130,7 @@ class AuthService:
         # Success — reset lockout counters.
         user.failed_login_count = 0
         user.locked_until = None
+        user.last_login_at = datetime.now(UTC)
         user.version += 1
 
         permissions = _get_permission_codes(user)
@@ -282,6 +293,7 @@ class AuthService:
             email=str(payload.email),
             full_name=payload.full_name,
             password_hash=hash_password(payload.password),
+            password_changed_at=datetime.now(UTC),
             role_id=role.id,
             created_by=created_by,
         )
@@ -294,6 +306,72 @@ class AuthService:
         )
         logger.info("user_created", username=payload.username, created_by=created_by)
         return new_user
+
+    def change_own_password(
+        self,
+        user: User,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        """Allow a user to change their own password.
+
+        Raises:
+            AuthenticationError: If current_password is incorrect.
+        """
+        if not verify_password(current_password, user.password_hash):
+            raise AuthenticationError("Current password is incorrect.")
+
+        user.password_hash = hash_password(new_password)
+        user.password_changed_at = datetime.now(UTC)
+        user.must_change_password = False
+        user.version += 1
+
+        # Revoke all other active sessions to force re-login everywhere else.
+        self._session_repo.revoke_all_for_user(user.id)
+
+        self._audit.log_action(
+            action="PASSWORD_CHANGED_SELF",
+            user_id=user.id,
+            details={},
+        )
+        logger.info("password_changed_self", user_id=user.id)
+
+    def update_own_profile(
+        self,
+        user: User,
+        payload,
+    ) -> User:
+        """Allow a user to update their own profile (username, full_name)."""
+        changed = False
+
+        if payload.username and payload.username.strip() != user.username:
+            new_username = payload.username.strip()
+            if new_username.lower() in ["admin", "system", "root"]:
+                from app.core.errors import ValidationError
+                raise ValidationError("Reserved username cannot be used.")
+            
+            existing = self._user_repo.get_by_username(new_username)
+            if existing is not None and existing.id != user.id:
+                from app.core.errors import DuplicateError
+                raise DuplicateError(f"Username '{new_username}' is already taken.")
+            user.username = new_username
+            changed = True
+
+        if payload.full_name and payload.full_name.strip() != user.full_name:
+            user.full_name = payload.full_name.strip()
+            changed = True
+
+        if changed:
+            user.version += 1
+            self._audit.log_action(
+                action="profile_updated",
+                user_id=user.id,
+                details={"username": user.username, "full_name": user.full_name},
+            )
+            logger.info("profile_updated", user_id=user.id, username=user.username)
+
+        return user
 
     # ------------------------------------------------------------------
     # Internal helpers

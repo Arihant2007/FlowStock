@@ -20,6 +20,8 @@ Production-grade Warehouse Management System digitizing the inventory transfer p
 | [Database](docs/Database.md) | Schema, ER diagram, migrations |
 | [API Reference](docs/API.md) | All endpoints, request/response schemas |
 | [Deployment](docs/Deployment.md) | Render, Vercel, Neon setup |
+| [User Guide](docs/UserGuide.md) | Core workflows (Material Upload, BOM, Requests) |
+| [Demo Guide](docs/DemoGuide.md) | Script for an 8-10 minute presentation |
 | [Developer Guide](docs/DeveloperGuide.md) | Local setup, code standards, testing |
 | [Excel Templates](docs/ExcelTemplates.md) | Upload format specifications |
 | [Troubleshooting](docs/Troubleshooting.md) | Common issues and solutions |

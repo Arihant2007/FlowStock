@@ -32,38 +32,53 @@ This guide provides a step-by-step walkthrough to demonstrate the capabilities o
 
 ## 2. Demonstration Flow
 
-### Role 1: Administrator (Master Data Setup)
+### Role 1: Administrator (User & Master Data Setup)
 1. Navigate to the frontend UI (`http://localhost:5173`).
 2. Log in using `admin` / `Admin@12345`.
-3. Navigate to **Master Data -> Warehouses** and observe the `RMPM-Main` and `ODS-Main` warehouses.
-4. Navigate to **Master Data -> Materials** to view `RM-001` (Wheat Flour) and `RM-002` (Edible Oil).
-5. Navigate to **Master Data -> SKUs** to view the BOM definition for `SKU-BISCUIT-500`.
+3. **Show User Management**:
+   - Go to **Administration -> Users**.
+   - Create a new User: "ODS Operator 2" (Username: `ods2`).
+   - Notice that no password is asked for. Click Save.
+   - **Show the Temporary Password modal** and explain how this simplifies the enterprise flow.
+4. **Show Master Data**:
+   - Navigate to **Master Data -> Warehouses** and observe the `RMPM-Main` and `ODS-Main` warehouses.
+   - Navigate to **Master Data -> Materials** to view the realistic dataset (`RM-POT-01` Raw Potato, `PM-FLM-01` Laminate Film Roll).
+   - Navigate to **Master Data -> SKUs** to view the BOM definition for `SKU-CHIPS-50` (Potato Chips 50g).
 
-### Role 2: RMPM Operator (Inventory Loading)
+### Role 2: New ODS Operator (First Login & Password Change)
+1. Log out, then log in using `ods2` and the **temporary password** you just copied.
+2. Observe the system immediately blocking access to the dashboard, forcing a **Mandatory Password Change**.
+3. Change the password and proceed to the dashboard.
+4. (Optional) Log out and log back in as the main `ods_op` / `OdsOp@12345` to continue with existing seeded data.
+
+### Role 3: RMPM Operator (Inventory Loading)
 1. Log out, then log in as `rmpm_op` / `Rmpm@12345`.
-2. Navigate to **Inventory -> Upload Snapshot**.
-3. Upload a sample snapshot indicating RMPM holds 1000kg of Wheat Flour and 500L of Edible Oil.
-4. Check **Inventory -> Balances** to confirm the ledger reflects the uploaded adjustment.
+2. Check **Inventory -> Balances** to confirm the ledger reflects the uploaded opening balance (e.g., 5000kg of Raw Potato).
+3. The dashboard clearly shows low stock alerts and recent activity.
 
-### Role 3: ODS Operator (Request Generation)
+### Role 4: ODS Operator (Request Generation)
 1. Log out, then log in as `ods_op` / `OdsOp@12345`.
-2. Navigate to **Inventory -> Upload Snapshot** and upload ODS's current stock (e.g., 10kg Flour).
-3. Navigate to **Material Requests** and create a new request to manufacture 100 units of `SKU-BISCUIT-500`.
-4. Observe the system automatically calculates the net RM/PM requirement by applying the BOM and subtracting the ODS Opening stock.
+2. Notice the Dashboard shows the previously seeded request (`SUBMITTED`).
+3. Navigate to **Material Requests** and create a new request to manufacture 10000 units of `SKU-CHIPS-50`.
+4. Observe how the system explodes the BOM: 10000 units * 0.05kg = 500kg of Potatoes.
+5. Notice how the system subtracts the ODS Opening Floor stock (if any) to calculate the **Net Requirement**.
+6. Submit the request.
 
-### Role 4: RMPM Operator (Approval & Dispatch)
+### Role 5: RMPM Operator (Approval & Dispatch)
 1. Log out, then log in as `rmpm_op` / `Rmpm@12345`.
 2. Navigate to **Material Requests** and view the newly created `SUBMITTED` request.
-3. Click **Reserve** to lock the required inventory.
-4. Click **Approve** to authorize the quantities and trigger the automated transfer (`TRANSFER_OUT` / `TRANSFER_IN`).
+3. Click **Reserve** to lock the required inventory in RMPM.
+4. Click **Approve** to authorize the quantities.
 5. Click **Dispatch** when the physical goods leave the RMPM warehouse.
 
-### Role 5: ODS Operator (Receiving & Closure)
+### Role 6: ODS Operator (Receiving & Closure)
 1. Log out, then log in as `ods_op` / `OdsOp@12345`.
 2. Navigate to **Material Requests**.
-3. View the `DISPATCHED` request and click **Receive** once the materials arrive.
+3. View the `DISPATCHED` request and click **Receive** once the materials physically arrive on the production floor.
 4. Click **Close** to complete the lifecycle.
 
-### Final Verification
-1. Navigate to **Reports -> Inventory Ledger**.
-2. Observe the complete transaction history, demonstrating an exact balance calculation devoid of any overlaps or double deductions.
+### Final Verification & Reporting
+1. Log back in as `admin` / `Admin@12345`.
+2. Navigate to **Reports -> Inventory Ledger**.
+3. Observe the complete transaction history, demonstrating an exact ledger balance calculation (Transfer OUT of RMPM, Transfer IN to ODS).
+4. Navigate to **Administration -> Audit Logs** to show the strict tracking of every status change (who approved it, when it happened).

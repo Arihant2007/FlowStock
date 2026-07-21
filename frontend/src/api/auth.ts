@@ -31,6 +31,16 @@ export const authApi = {
     const { data } = await client.post<ApiResponse<UserOut>>('/auth/users', payload)
     return data
   },
+
+  changePassword: async (payload: { current_password: string; new_password: string }) => {
+    const { data } = await client.post<ApiResponse<Record<string, never>>>('/auth/me/password', payload)
+    return data
+  },
+
+  updateProfile: async (payload: { username?: string; full_name?: string }) => {
+    const { data } = await client.patch<ApiResponse<UserOut>>('/auth/me/profile', payload)
+    return data
+  },
 }
 
 export interface CreateUserRequest {

@@ -1,22 +1,40 @@
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
-import { format, parseISO } from 'date-fns'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function formatDate(dateStr: string | null | undefined, fmt = 'dd MMM yyyy'): string {
+export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   try {
-    return format(parseISO(dateStr), fmt)
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return dateStr
+    return new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    }).format(d)
   } catch {
     return dateStr
   }
 }
 
 export function formatDateTime(dateStr: string | null | undefined): string {
-  return formatDate(dateStr, 'dd MMM yyyy, HH:mm')
+  if (!dateStr) return '—'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return dateStr
+    return new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d)
+  } catch {
+    return dateStr
+  }
 }
 
 export function formatQty(qty: string | number | null | undefined, decimals = 4): string {

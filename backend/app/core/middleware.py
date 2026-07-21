@@ -80,11 +80,25 @@ class AppExceptionMiddleware(BaseHTTPMiddleware):
             )
         except Exception as exc:  # noqa: BLE001
             import traceback
+            from sqlalchemy.exc import IntegrityError, DataError, StatementError
+            
             traceback.print_exc()
             try:
                 logger.exception("unhandled_error", exc_info=exc)
             except Exception:
                 pass
+                
+            if isinstance(exc, (IntegrityError, DataError, StatementError)):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "code": "DB_CONSTRAINT_ERROR",
+                        "message": "A database constraint violation or data format error occurred.",
+                        "details": {"error": str(exc.orig) if hasattr(exc, "orig") else str(exc)},
+                    },
+                )
+                
             return JSONResponse(
                 status_code=500,
                 content={

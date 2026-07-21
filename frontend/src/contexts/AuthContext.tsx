@@ -15,9 +15,12 @@ interface AuthContextType {
   permissions: string[]
   isLoading: boolean
   isAuthenticated: boolean
+  mustChangePassword: boolean
   login: (identifier: string, password: string) => Promise<void>
   logout: () => Promise<void>
   hasPermission: (permission: string) => boolean
+  clearMustChangePassword: () => void
+  refetchUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -32,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return stored ? JSON.parse(stored) : []
   })
   const [isLoading, setIsLoading] = useState(true)
+  const [mustChangePassword, setMustChangePassword] = useState(false)
 
   // Validate session on mount
   useEffect(() => {
@@ -46,17 +50,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const u = resp.data
         setUser(u)
         setPermissions(u.permissions)
+        setMustChangePassword(u.must_change_password ?? false)
         localStorage.setItem('user', JSON.stringify(u))
         localStorage.setItem('permissions', JSON.stringify(u.permissions))
       } catch {
         tokenStorage.clear()
         setUser(null)
         setPermissions([])
+        setMustChangePassword(false)
       } finally {
         setIsLoading(false)
       }
     }
     validateSession()
+  }, [])
+
+  const refetchUser = useCallback(async () => {
+    const token = tokenStorage.getAccess()
+    if (!token) return
+    try {
+      const resp = await authApi.me()
+      const u = resp.data
+      setUser(u)
+      setPermissions(u.permissions)
+      setMustChangePassword(u.must_change_password ?? false)
+      localStorage.setItem('user', JSON.stringify(u))
+      localStorage.setItem('permissions', JSON.stringify(u.permissions))
+    } catch {
+      // do nothing
+    }
   }, [])
 
   const login = useCallback(async (identifier: string, password: string) => {
@@ -69,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const u = meResp.data
     setUser(u)
     setPermissions(perms)
+    setMustChangePassword(u.must_change_password ?? false)
     localStorage.setItem('user', JSON.stringify(u))
     localStorage.setItem('permissions', JSON.stringify(perms))
   }, [])
@@ -85,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenStorage.clear()
     setUser(null)
     setPermissions([])
+    setMustChangePassword(false)
   }, [])
 
   const hasPermission = useCallback(
@@ -92,16 +116,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [permissions]
   )
 
+  const clearMustChangePassword = useCallback(() => {
+    setMustChangePassword(false)
+    if (user) {
+      const updated = { ...user, must_change_password: false }
+      setUser(updated)
+      localStorage.setItem('user', JSON.stringify(updated))
+    }
+  }, [user])
+
   return (
     <AuthContext.Provider
       value={{
         user,
         permissions,
         isLoading,
-        isAuthenticated: user !== null,
+        isAuthenticated: !!user,
+        mustChangePassword,
         login,
         logout,
         hasPermission,
+        clearMustChangePassword,
+        refetchUser,
       }}
     >
       {children}

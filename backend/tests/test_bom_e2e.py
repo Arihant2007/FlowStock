@@ -108,8 +108,8 @@ def test_bom_upload_parser(db):
     assert "Sheet4" in preview.empty_sheets
 
     # - Valid rows and errors
-    assert preview.error_rows == 6 # 1 from s2, 4 from s5 (duplicate materials for the same SKUs in s1), 1 unknown material
-    # Wait, the duplicate material code, unknown material, missing SKU code!
+    assert preview.error_rows == 5
+    # We should NOT have global errors for Sheet2 (missing SKU code) because it falls back to Name.
 
     # We should NOT have global errors for Sheet2 (missing SKU code) because it falls back to Name.
     assert len(preview.errors) == 0

@@ -1,71 +1,31 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { motion, AnimatePresence } from 'framer-motion'
 import { masterApi } from '@/api/master'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Tr, Td } from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
 import { getErrorMessage } from '@/lib/utils'
-import { Upload, CheckCircle, XCircle, AlertCircle, FileSpreadsheet, ArrowRight, Download, ChevronRight } from 'lucide-react'
+import { PageHeader } from '@/components/enterprise/PageHeader'
+import { MetricCard } from '@/components/enterprise/MetricCard'
+import { Upload, CheckCircle2, XCircle, AlertCircle, FileSpreadsheet, Download, ChevronRight, Check } from 'lucide-react'
 import type { BOMUploadPreview } from '@/types/api'
 
-function CollapsibleCard({ title, count, children, defaultExpanded = false, icon: Icon, colorClass, borderClass, bgClass = "" }: any) {
-  const [expanded, setExpanded] = useState(defaultExpanded)
-  return (
-    <Card className={`${borderClass} ${bgClass} flex flex-col`}>
-      <CardHeader 
-        className="pb-2 pt-3 shrink-0 cursor-pointer flex flex-row items-center justify-between select-none hover:bg-black/5 transition-colors" 
-        onClick={() => setExpanded(!expanded)}
-      >
-        <CardTitle className={`text-sm ${colorClass} flex items-center gap-1.5`}>
-          <Icon className="h-4 w-4" /> {title} ({count})
-        </CardTitle>
-        <div className={`transform transition-transform duration-200 ${colorClass} ${expanded ? 'rotate-90' : 'rotate-0'}`}>
-          <ChevronRight className="h-4 w-4" />
-        </div>
-      </CardHeader>
-      <div className={`transition-all duration-300 ease-in-out overflow-hidden flex flex-col min-h-0 ${expanded ? 'max-h-[300px] opacity-100' : 'max-h-0 opacity-0'}`}>
-        {children}
-      </div>
-    </Card>
-  )
-}
-function formatMessage(msg: string) {
-  const match = msg.match(/Sheet '[^']+', Row (\d+): (.*)/)
-  if (match) {
-    return <><span className="font-semibold opacity-75">Row {match[1]}</span> &ndash; {match[2]}</>
-  }
-  return msg
-}
-
-function ExpandableList({ items, renderItem, className, limit = 20, buttonClass }: { items: string[], renderItem: (item: string, i: number) => React.ReactNode, className?: string, limit?: number, buttonClass?: string }) {
-  const [showAll, setShowAll] = useState(false)
-  const displayed = showAll ? items : items.slice(0, limit)
-  
-  return (
-    <>
-      <ul className={className}>
-        {displayed.map(renderItem)}
-      </ul>
-      {items.length > limit && (
-        <div className="pt-2 sticky bottom-0 pb-1 mt-auto bg-inherit">
-          <Button variant="outline" size="sm" className={`h-7 text-xs w-full bg-white/50 backdrop-blur-sm ${buttonClass}`} onClick={() => setShowAll(!showAll)}>
-            {showAll ? 'Show Less' : `Show All (${items.length - limit} more)`}
-          </Button>
-        </div>
-      )}
-    </>
-  )
+const fadeVariants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+  exit: { opacity: 0, y: -10, transition: { duration: 0.2 } },
 }
 
 export function BOMUploadPage() {
-  const [file, setFile] = useState<File | null>(null)
+  const [_file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<BOMUploadPreview | null>(null)
   const [step, setStep] = useState<'upload' | 'pending_session' | 'preview' | 'done'>('upload')
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [commitResult, setCommitResult] = useState<any>(null)
-  
+  const [isDragging, setIsDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     const savedSession = sessionStorage.getItem('bomUploadSessionId')
     if (savedSession) {
@@ -74,9 +34,8 @@ export function BOMUploadPage() {
     }
   }, [])
 
-
   const previewMutation = useMutation({
-    mutationFn: (params: { file?: File, sessionId?: string }) => masterApi.previewBOMUpload(params),
+    mutationFn: (params: { file?: File; sessionId?: string }) => masterApi.previewBOMUpload(params),
     onSuccess: (data) => {
       setPreview(data.data)
       if (data.data.session_id) {
@@ -86,12 +45,12 @@ export function BOMUploadPage() {
       setStep('preview')
     },
     onError: (err) => {
-        toast.error(getErrorMessage(err))
-        if (err.message?.includes('expired') || err.message?.includes('found')) {
-            sessionStorage.removeItem('bomUploadSessionId')
-            setSessionId(null)
-            setStep('upload')
-        }
+      toast.error(getErrorMessage(err))
+      if (err.message?.includes('expired') || err.message?.includes('found')) {
+        sessionStorage.removeItem('bomUploadSessionId')
+        setSessionId(null)
+        setStep('upload')
+      }
     },
   })
 
@@ -101,10 +60,8 @@ export function BOMUploadPage() {
     mutationFn: (sId: string) => masterApi.commitBOMUpload(sId),
     onSuccess: (data) => {
       toast.success('BOM imported successfully.')
-      // Invalidate SKU options + full SKU list so dropdowns reflect new SKUs immediately
       qc.invalidateQueries({ queryKey: ['master', 'skus'] })
       qc.invalidateQueries({ queryKey: ['master', 'skuOptions'] })
-      // Refresh dashboard SKU/BOM counters
       qc.invalidateQueries({ queryKey: ['master', 'dashboard', 'stats'] })
       sessionStorage.removeItem('bomUploadSessionId')
       setSessionId(null)
@@ -113,7 +70,7 @@ export function BOMUploadPage() {
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   })
-  
+
   const cancelMutation = useMutation({
     mutationFn: (sId: string) => masterApi.cancelBOMUpload(sId),
     onSuccess: () => {
@@ -123,14 +80,41 @@ export function BOMUploadPage() {
       setPreview(null)
       setStep('upload')
       toast.success('Upload session cancelled')
-    }
+    },
   })
+
+  const processFile = (f: File) => {
+    setFile(f)
+    setPreview(null)
+    previewMutation.mutate({ file: f })
+  }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (f) { setFile(f); setPreview(null); setStep('upload') }
+    if (f) processFile(f)
   }
-  
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const f = e.dataTransfer.files?.[0]
+    if (f && (f.name.endsWith('.xlsx') || f.name.endsWith('.xls'))) {
+      processFile(f)
+    } else {
+      toast.error('Please upload a valid Excel file (.xlsx or .xls)')
+    }
+  }
+
   const handleReplace = () => {
     if (sessionId) {
       cancelMutation.mutate(sessionId)
@@ -141,340 +125,275 @@ export function BOMUploadPage() {
     }
   }
 
+  const steps = [
+    { id: 'upload', label: '1. Upload File' },
+    { id: 'preview', label: '2. Review & Validate' },
+    { id: 'done', label: '3. Import Complete' },
+  ]
+  const currentStepIndex = step === 'pending_session' ? 0 : steps.findIndex((s) => s.id === step)
+
   return (
-    <div className="space-y-6 animate-fade-in max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <FileSpreadsheet className="h-6 w-6" /> BOM Upload
-        </h1>
-        <p className="text-muted-foreground text-sm">Upload an Excel file to create or update Bills of Materials</p>
+    <div className="space-y-6 max-w-6xl mx-auto">
+      <PageHeader
+        title="BOM Upload Wizard"
+        subtitle="Import multi-level Bills of Materials to associate finished goods SKUs with raw materials"
+      />
+
+      {/* Stepper Progress Bar */}
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between max-w-xl mx-auto">
+          {steps.map((s, i) => {
+            const isCompleted = i < currentStepIndex
+            const isCurrent = i === currentStepIndex
+
+            return (
+              <div key={s.id} className="flex items-center gap-2.5">
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all ${
+                    isCompleted
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : isCurrent
+                      ? 'bg-blue-600 text-white ring-4 ring-blue-100 shadow-sm'
+                      : 'bg-slate-100 text-slate-400'
+                  }`}
+                >
+                  {isCompleted ? <Check className="h-4 w-4" /> : i + 1}
+                </div>
+                <span className={`text-xs font-semibold ${isCurrent ? 'text-slate-900' : 'text-slate-400'}`}>
+                  {s.label}
+                </span>
+                {i < steps.length - 1 && <div className="h-0.5 w-12 bg-slate-100 mx-2 hidden sm:block" />}
+              </div>
+            )
+          })}
+        </div>
       </div>
 
-      {/* Progress */}
-      <div className="flex items-center gap-2 text-sm">
-        {['Upload', 'Preview', 'Done'].map((s, i) => (
-          <div key={s} className="flex items-center gap-2">
-            <div className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium transition-colors ${
-              step === s.toLowerCase() ? 'bg-primary text-primary-foreground' :
-              (i < ['upload', 'preview', 'done'].indexOf(step)) ? 'bg-green-500 text-white' :
-              'bg-muted text-muted-foreground'
-            }`}>
-              {i < ['upload', 'preview', 'done'].indexOf(step) ? '✓' : i + 1}
+      <AnimatePresence mode="wait">
+        {step === 'pending_session' && (
+          <motion.div key="pending" variants={fadeVariants} initial="hidden" animate="visible" exit="exit">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-6 space-y-4 shadow-sm">
+              <div>
+                <h3 className="font-bold text-amber-950 text-base">Unfinished BOM Session Detected</h3>
+                <p className="text-xs text-amber-900 mt-0.5">
+                  You have a previously uploaded BOM session in progress. You can resume or discard it.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  onClick={() => previewMutation.mutate({ sessionId: sessionId! })}
+                  disabled={previewMutation.isPending}
+                  className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white h-9 px-5 text-xs font-semibold shadow-sm"
+                >
+                  Resume Session
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleReplace}
+                  disabled={cancelMutation.isPending}
+                  className="rounded-xl border-amber-200 text-amber-900 hover:bg-amber-100 h-9 px-4 text-xs font-semibold"
+                >
+                  Discard & Start New
+                </Button>
+              </div>
             </div>
-            <span className={step === s.toLowerCase() ? 'font-medium' : 'text-muted-foreground'}>{s}</span>
-            {i < 2 && <ArrowRight className="h-4 w-4 text-muted-foreground" />}
-          </div>
-        ))}
-      </div>
+          </motion.div>
+        )}
 
-      {/* Pending Session Step */}
-      {step === 'pending_session' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Pending Upload Found</CardTitle>
-            <CardDescription>You have an unfinished BOM upload session.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex gap-3">
-              <Button onClick={() => previewMutation.mutate({ sessionId: sessionId! })} isLoading={previewMutation.isPending}>
-                Resume Upload
-              </Button>
-              <Button variant="outline" onClick={handleReplace} isLoading={cancelMutation.isPending}>
-                Discard & Start New
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Step 1: Upload */}
-      {step === 'upload' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Select Excel File</CardTitle>
-            <CardDescription>
-              Expected columns: SKU Code, Material Code, Quantity Per Unit, Material Type (RM/PM)
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer hover:bg-muted/30 transition-colors">
-              <Upload className="h-8 w-8 text-muted-foreground mb-2" />
-              <span className="text-sm text-muted-foreground">
-                {file ? file.name : 'Click to select or drag & drop an Excel file'}
-              </span>
-              <span className="text-xs text-muted-foreground mt-1">.xlsx, .xls</span>
-              <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileChange} />
-            </label>
-            {file && (
-              <Button
-                onClick={() => previewMutation.mutate({ file })}
-                isLoading={previewMutation.isPending}
-                className="w-full"
+        {step === 'upload' && (
+          <motion.div key="upload" variants={fadeVariants} initial="hidden" animate="visible" exit="exit">
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-8 shadow-sm">
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`relative flex flex-col items-center justify-center w-full min-h-[320px] border-2 border-dashed rounded-2xl cursor-pointer transition-all ${
+                  isDragging
+                    ? 'border-blue-600 bg-blue-50/50 scale-[1.005]'
+                    : 'border-slate-200 bg-slate-50/40 hover:border-blue-400 hover:bg-slate-50'
+                }`}
               >
-                Preview Upload
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
+                <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileChange} />
 
-      {/* Step 2: Preview */}
-      {step === 'preview' && preview && (
-        <div className="space-y-4">
-          {/* Summary */}
-          <div className="grid grid-cols-4 gap-4">
-            <Card className="border-green-200 bg-green-50">
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-5 w-5 text-green-600" />
-                  <div>
-                    <p className="text-2xl font-bold text-green-700">{preview.valid_rows}</p>
-                    <p className="text-xs text-green-600">Valid rows</p>
+                {previewMutation.isPending ? (
+                  <div className="flex flex-col items-center text-blue-600">
+                    <div className="h-10 w-10 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin mb-3" />
+                    <p className="font-semibold text-xs text-slate-700">Analyzing BOM File Structure...</p>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border-red-200 bg-red-50">
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-2">
-                  <XCircle className="h-5 w-5 text-red-600" />
-                  <div>
-                    <p className="text-2xl font-bold text-red-700">{preview.error_rows}</p>
-                    <p className="text-xs text-red-600">Error rows</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border-amber-200 bg-amber-50">
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="h-5 w-5 text-amber-600" />
-                  <div>
-                    <p className="text-2xl font-bold text-amber-700">{preview.pending_rows ?? 0}</p>
-                    <p className="text-xs text-amber-600">Pending Materials</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-2xl font-bold">{preview.total_rows}</p>
-                    <p className="text-xs text-muted-foreground">Total rows</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                ) : (
+                  <>
+                    <div className="h-14 w-14 rounded-2xl bg-blue-50 flex items-center justify-center mb-3 text-blue-600 shadow-sm border border-blue-100">
+                      <Upload className="h-7 w-7" />
+                    </div>
+                    <h3 className="text-base font-bold text-slate-900 mb-1">Drag & drop your BOM Excel file here</h3>
+                    <p className="text-xs text-slate-500 mb-4">or click to browse from your device</p>
+                    <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-xs">
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" /> Excel Format (.xlsx, .xls)
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
 
-          {/* Errors */}
-          {preview.errors.length > 0 && (
-            <CollapsibleCard 
-              title="Errors" 
-              count={preview.errors.length} 
-              defaultExpanded={true} 
-              icon={AlertCircle} 
-              colorClass="text-red-700" 
-              borderClass="border-red-200"
-            >
-              <CardContent className="pt-0 overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-red-200 hover:[&::-webkit-scrollbar-thumb]:bg-red-300 relative">
-                <ExpandableList 
-                  items={preview.errors} 
-                  className="space-y-1 pl-4 list-disc text-sm text-red-700 mt-2"
-                  buttonClass="text-red-700 hover:text-red-800 border-red-200 hover:bg-red-100"
-                  renderItem={(e: any, i: number) => <li key={i}>{formatMessage(e)}</li>} 
-                />
-              </CardContent>
-            </CollapsibleCard>
-          )}          {/* Warnings Grouped */}
-          {preview.warnings && preview.warnings.length > 0 && (
-            <CollapsibleCard 
-              title="Warnings" 
-              count={preview.warnings.length} 
-              defaultExpanded={false} 
-              icon={AlertCircle} 
-              colorClass="text-amber-700" 
-              borderClass="border-amber-200"
-            >
-              <CardContent className="pt-0 overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-amber-200 hover:[&::-webkit-scrollbar-thumb]:bg-amber-300 relative">
-                <ExpandableList 
-                  items={preview.warnings} 
-                  className="space-y-1 pl-4 list-disc text-amber-700 text-sm mt-2"
-                  buttonClass="text-amber-800 hover:text-amber-900 border-amber-200 hover:bg-amber-100"
-                  renderItem={(w: any, i: number) => <li key={i}>{formatMessage(w)}</li>} 
-                />
-              </CardContent>
-            </CollapsibleCard>
-          )}
+        {step === 'preview' && preview && (
+          <motion.div key="preview" variants={fadeVariants} initial="hidden" animate="visible" exit="exit" className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <MetricCard
+                title="Valid Rows"
+                value={preview.valid_rows}
+                subtext="Valid Recipes"
+                icon={CheckCircle2}
+                badge={{ text: 'Valid', variant: 'success' }}
+              />
+              <MetricCard
+                title="Error Rows"
+                value={preview.error_rows}
+                subtext="Action Required"
+                icon={XCircle}
+                badge={{ text: preview.error_rows > 0 ? 'Error' : 'Clean', variant: preview.error_rows > 0 ? 'danger' : 'success' }}
+              />
+              <MetricCard
+                title="Pending Materials"
+                value={Array.isArray(preview.pending_rows) ? preview.pending_rows.length : (preview.pending_rows ?? 0)}
+                subtext="Missing Material Master"
+                icon={AlertCircle}
+                badge={{ text: 'Pending', variant: 'warning' }}
+              />
+              <MetricCard
+                title="Total BOM Rows"
+                value={preview.total_rows}
+                subtext="Processed Data"
+                icon={FileSpreadsheet}
+              />
+            </div>
 
-          {/* Rows preview */}
-          <Card>
-            <CardContent className="pt-4 pb-0">
-              <Table headers={['Row', 'SKU Code', 'Material Code', 'Qty/Unit', 'Status', 'Message']} isEmpty={preview.rows.length === 0}>
+            {/* SadaxCart Data Table Container */}
+            <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden space-y-2">
+              <div className="p-4 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900 text-sm">BOM Structure Preview</h3>
+                <p className="text-xs text-slate-500">Review SKU code, material quantities, and status</p>
+              </div>
+
+              <Table
+                headers={['Row', 'SKU Code', 'Material Code', 'Qty per Unit', 'Status', 'Message']}
+                isEmpty={preview.rows.length === 0}
+                className="border-0 shadow-none rounded-none"
+              >
                 {preview.rows.map((row) => (
                   <Tr key={row.row_number}>
-                    <Td>{row.row_number}</Td>
-                    <Td className="font-mono">{row.sku_code}</Td>
-                    <Td className="font-mono">{row.material_code}</Td>
-                    <Td>{row.quantity_per_unit}</Td>
+                    <Td className="text-slate-400 font-mono text-xs text-center">{row.row_number}</Td>
+                    <Td className="font-mono text-xs font-semibold text-slate-900">{row.sku_code}</Td>
+                    <Td className="font-mono text-xs font-semibold text-blue-700">{row.material_code}</Td>
+                    <Td className="font-semibold text-slate-900 text-xs">{row.quantity_per_unit}</Td>
                     <Td>
-                      <Badge
-                        label={row.status === 'pending_material' ? 'Pending Material' : row.status}
-                        className={
-                          row.status === 'valid' ? 'bg-green-100 text-green-800' :
-                          row.status === 'error' ? 'bg-red-100 text-red-800' :
-                          row.status === 'pending_material' ? 'bg-amber-100 text-amber-800' :
-                          'bg-amber-100 text-amber-800'
-                        }
-                      />
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                          row.status === 'valid'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : row.status === 'error'
+                            ? 'bg-red-50 text-red-700 border-red-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}
+                      >
+                        {row.status.toUpperCase()}
+                      </span>
                     </Td>
-                    <Td className="text-muted-foreground text-xs">{row.message}</Td>
+                    <Td className="text-slate-500 text-xs max-w-[200px] truncate">{row.message || '—'}</Td>
                   </Tr>
                 ))}
               </Table>
-            </CardContent>
-          </Card>
+            </div>
 
-          {/* Actions & Extraction Summary */}
-          <div className="flex flex-col gap-4">
-            {preview.unknown_materials?.length > 0 && (
-              <Card className="bg-amber-50/50 border-amber-200">
-                <CardContent className="pt-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="space-y-1 text-sm text-amber-900">
-                    <p className="font-semibold text-base flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4" /> Generate Missing Materials
-                    </p>
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-1">
-                      <span>Unique Materials Found:</span>
-                      <span className="font-medium text-right">{new Set(preview.rows.filter(r => r.material_code).map(r => r.material_code)).size}</span>
-                      <span>Already Exist:</span>
-                      <span className="font-medium text-right">
-                        {new Set(preview.rows.filter(r => r.material_code).map(r => r.material_code)).size - preview.unknown_materials.length}
-                      </span>
-                      <span className="font-semibold">Need Import:</span>
-                      <span className="font-bold text-amber-700 text-right">{preview.unknown_materials.length}</span>
-                    </div>
-                    <p className="text-xs text-amber-800 mt-2">
-                      <strong>Workflow:</strong> 1. Download Template → 2. Complete Excel → 3. Upload to Material Master → 4. Click "Resume BOM Import"
-                    </p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    className="bg-amber-100 text-amber-800 hover:bg-amber-200 shrink-0"
-                    onClick={async () => {
-                      if (!file && !sessionId) return;
-                      try {
-                        const blob = await masterApi.extractMaterialsFromBOM(null, sessionId, true);
-                        const url = window.URL.createObjectURL(new Blob([blob]));
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.setAttribute('download', 'extracted_materials.xlsx');
-                        document.body.appendChild(link);
-                        link.click();
-                        link.remove();
-                        toast.success('Generated template downloaded. Fill it and upload to Material Master.');
-                      } catch (e: any) {
-                        console.error('Extraction failed:', e);
-                        toast.error(`Failed to generate template: ${getErrorMessage(e) || e.message}`);
-                      }
-                    }}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download Material Master
-                  </Button>
-                </CardContent>
-              </Card>
+            {/* Missing Materials Extraction Banner */}
+            {preview.unknown_materials && preview.unknown_materials.length > 0 && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h4 className="font-bold text-amber-950 text-sm flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-amber-600" /> {preview.unknown_materials.length} Missing Materials Found
+                  </h4>
+                  <p className="text-xs text-amber-900 mt-1">
+                    Download the auto-generated template, upload missing materials to Material Master, then click "Resume BOM Import".
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      const blob = await masterApi.extractMaterialsFromBOM(null, sessionId, true)
+                      const url = window.URL.createObjectURL(new Blob([blob]))
+                      const link = document.createElement('a')
+                      link.href = url
+                      link.setAttribute('download', 'extracted_materials.xlsx')
+                      document.body.appendChild(link)
+                      link.click()
+                      link.remove()
+                      toast.success('Downloaded extracted materials template.')
+                    } catch (e: any) {
+                      toast.error(`Extraction failed: ${getErrorMessage(e)}`)
+                    }
+                  }}
+                  className="rounded-xl border-amber-300 text-amber-950 hover:bg-amber-100 h-9 px-4 text-xs font-semibold shrink-0"
+                >
+                  <Download className="mr-1.5 h-3.5 w-3.5" /> Download Materials Template
+                </Button>
+              </div>
             )}
 
-            <div className="flex gap-3 items-center">
-              <Button variant="outline" onClick={handleReplace}>Cancel</Button>
+            {/* Action Bar */}
+            <div className="flex items-center justify-between pt-2">
+              <Button
+                variant="outline"
+                onClick={handleReplace}
+                className="rounded-xl border-slate-200 bg-white text-slate-700 hover:bg-slate-50 h-10 px-5 text-xs font-semibold"
+              >
+                Cancel Session
+              </Button>
               <Button
                 onClick={() => {
                   if (preview.session_status === 'WAITING_FOR_MATERIALS') {
-                    sessionId && previewMutation.mutate({ sessionId })
+                    if (sessionId) previewMutation.mutate({ sessionId })
                   } else {
-                    sessionId && commitMutation.mutate(sessionId)
+                    if (sessionId) commitMutation.mutate(sessionId)
                   }
                 }}
-                isLoading={commitMutation.isPending || previewMutation.isPending}
                 disabled={preview.session_status !== 'READY_TO_COMMIT' && preview.session_status !== 'WAITING_FOR_MATERIALS'}
+                className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white h-10 px-6 text-xs font-semibold shadow-sm"
               >
-                {preview.session_status === 'WAITING_FOR_MATERIALS' ? 'Resume BOM Import' : 'Commit Upload'}
+                {preview.session_status === 'WAITING_FOR_MATERIALS' ? 'Resume BOM Import' : 'Commit BOM to Database'}
+                {preview.session_status !== 'WAITING_FOR_MATERIALS' && <ChevronRight className="ml-1.5 h-4 w-4" />}
               </Button>
             </div>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
 
-      {/* Step 3: Done */}
-      {step === 'done' && commitResult && (
-        <Card className="border-green-200">
-          <CardHeader className="bg-green-50/50 pb-4 border-b border-green-100">
-            <CardTitle className="text-lg font-semibold text-green-800 flex items-center gap-2">
-              <CheckCircle className="h-5 w-5 text-green-600" />
-              BOM Import Completed Successfully
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-6 space-y-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-muted/50 p-4 rounded-lg text-center">
-                <p className="text-3xl font-bold text-primary">{commitResult.skus_created}</p>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">SKUs Created</p>
+        {step === 'done' && commitResult && (
+          <motion.div key="done" variants={fadeVariants} initial="hidden" animate="visible" exit="exit">
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-12 text-center shadow-sm max-w-lg mx-auto flex flex-col items-center">
+              <div className="h-16 w-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4 border border-emerald-100">
+                <CheckCircle2 className="h-8 w-8 text-emerald-600" />
               </div>
-              <div className="bg-muted/50 p-4 rounded-lg text-center">
-                <p className="text-3xl font-bold text-primary">{commitResult.skus_updated}</p>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">SKUs Updated</p>
-              </div>
-              <div className="bg-muted/50 p-4 rounded-lg text-center">
-                <p className="text-3xl font-bold text-primary">{commitResult.bom_versions_created}</p>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">BOM Versions</p>
-              </div>
-              <div className="bg-muted/50 p-4 rounded-lg text-center">
-                <p className="text-3xl font-bold text-primary">{commitResult.items_created}</p>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-1">BOM Items</p>
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center text-sm border-t pt-4">
-              <span className="text-muted-foreground">
-                <b className="text-foreground">{commitResult.materials_referenced}</b> Materials Referenced
-              </span>
-              <span className="text-muted-foreground">
-                Duration: <b className="text-foreground">{commitResult.duration_seconds?.toFixed(2)}s</b>
-              </span>
-            </div>
-
-            {commitResult.warnings && commitResult.warnings.length > 0 && (
-              <CollapsibleCard 
-                title="Warnings" 
-                count={commitResult.warnings.length} 
-                defaultExpanded={false} 
-                icon={AlertCircle} 
-                colorClass="text-amber-800" 
-                borderClass="border-amber-100"
-                bgClass="bg-amber-50"
+              <h3 className="text-xl font-bold text-slate-900 mb-1">BOM Import Completed</h3>
+              <p className="text-xs text-slate-500 mb-6">
+                Created {commitResult.skus_created} SKUs, updated {commitResult.skus_updated} SKUs, and registered {commitResult.items_created} BOM items.
+              </p>
+              <Button
+                onClick={() => {
+                  setStep('upload')
+                  setFile(null)
+                  setPreview(null)
+                  setCommitResult(null)
+                }}
+                className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-6 h-10 text-xs font-semibold shadow-sm"
               >
-                <div className="overflow-y-auto min-h-0 custom-scrollbar [&::-webkit-scrollbar-thumb]:bg-amber-200 hover:[&::-webkit-scrollbar-thumb]:bg-amber-300 relative p-4 pt-0">
-                  <ExpandableList 
-                    items={commitResult.warnings} 
-                    className="text-sm text-amber-700 list-disc pl-5 mt-2"
-                    buttonClass="text-amber-800 hover:text-amber-900 border-amber-200 hover:bg-amber-100"
-                    renderItem={(w: any, i: number) => <li key={i}>{formatMessage(w)}</li>} 
-                  />
-                </div>
-              </CollapsibleCard>
-            )}
-
-            <div className="flex gap-3 pt-2">
-              <Button onClick={() => { setStep('upload'); setFile(null); setPreview(null); setCommitResult(null) }}>
-                Upload Another BOM
+                Upload Another BOM File
               </Button>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

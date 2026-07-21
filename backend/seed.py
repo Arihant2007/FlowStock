@@ -48,6 +48,8 @@ PERMISSIONS = [
     ("auth:login", "Authenticate and receive tokens"),
     ("users:create", "Create new system users"),
     ("users:read", "View user profiles"),
+    ("users:manage", "Create, edit, reset password, lock/unlock, activate/deactivate users"),
+    ("admin:read", "Access the administration module"),
     ("master:read", "Read master data (SKUs, materials, BOMs)"),
     ("master:write", "Create and update master data"),
     ("inventory:read", "View inventory balances and transactions"),
@@ -62,7 +64,7 @@ PERMISSIONS = [
 ]
 
 ROLE_PERMISSIONS: dict[str, list[str]] = {
-    "ADMIN": [p[0] for p in PERMISSIONS],  # Admin gets everything.
+    "SYSTEM_ADMINISTRATOR": [p[0] for p in PERMISSIONS],  # Admin gets everything.
     "ODS_OPERATOR": [
         "auth:login",
         "master:read",
@@ -133,11 +135,14 @@ def seed(db: Session) -> None:  # noqa: C901
 
     print("Seeding roles...")
     role_map: dict[str, Role] = {}
-    for role_name in ["ADMIN", "ODS_OPERATOR", "RMPM_OPERATOR"]:
+    for role_name in ["SYSTEM_ADMINISTRATOR", "ODS_OPERATOR", "RMPM_OPERATOR"]:
         r = db.query(Role).filter_by(name=role_name).first()
         if r is None:
-            r = Role(name=role_name)
+            r = Role(name=role_name, is_system=True)
             db.add(r)
+            db.flush()
+        else:
+            r.is_system = True
             db.flush()
         role_map[role_name] = r
 
@@ -156,7 +161,7 @@ def seed(db: Session) -> None:  # noqa: C901
     db.flush()
 
     print("Seeding users...")
-    admin_role = role_map["ADMIN"]
+    admin_role = role_map["SYSTEM_ADMINISTRATOR"]
     ods_role = role_map["ODS_OPERATOR"]
     rmpm_role = role_map["RMPM_OPERATOR"]
 
@@ -245,9 +250,14 @@ def seed(db: Session) -> None:  # noqa: C901
 
     print("Seeding sample materials...")
     mat_defs = [
-        ("RM-001", "Wheat Flour", "kg", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
-        ("RM-002", "Edible Oil", "L", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
-        ("PM-001", "Cardboard Box 500g", "units", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Cartons"].id),
+        ("RM-POT-01", "Raw Potato", "kg", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("RM-OIL-01", "Edible Oil", "L", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("RM-SLT-01", "Salt", "kg", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("RM-SPC-01", "Masala Spices", "kg", cat_map["Raw Material"].id, type_map["RM"].id, group_map["Ingredients"].id),
+        ("PM-FLM-01", "Laminate Film Roll", "m", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Films"].id),
+        ("PM-BOX-01", "Corrugated Carton Box", "units", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Cartons"].id),
+        ("PM-PCH-50", "Primary Pouch 50g", "units", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Pouches"].id),
+        ("PM-PCH-100", "Primary Pouch 100g", "units", cat_map["Packaging Material"].id, type_map["PM"].id, group_map["Pouches"].id),
     ]
     mat_map: dict[str, Material] = {}
     for code, name, uom, cat_id, type_id, group_id in mat_defs:
@@ -266,28 +276,53 @@ def seed(db: Session) -> None:  # noqa: C901
         mat_map[code] = m
 
     print("Seeding sample SKU and BOM...")
-    sku = db.query(SKU).filter_by(code="SKU-BISCUIT-500").first()
-    if not sku:
-        sku = SKU(code="SKU-BISCUIT-500", name="Biscuit 500g Pack")
-        db.add(sku)
+    sku_defs = [
+        ("SKU-CHIPS-50", "Potato Chips 50g"),
+        ("SKU-CHIPS-100", "Potato Chips 100g"),
+    ]
+    sku_map = {}
+    for sku_code, sku_name in sku_defs:
+        sku = db.query(SKU).filter_by(code=sku_code).first()
+        if not sku:
+            sku = SKU(code=sku_code, name=sku_name)
+            db.add(sku)
+            db.flush()
+        sku_map[sku_code] = sku
+
+    # BOM for 50g Chips
+    bom_50 = db.query(BOMVersion).filter_by(sku_id=sku_map["SKU-CHIPS-50"].id, version_number=1).first()
+    if not bom_50:
+        bom_50 = BOMVersion(sku_id=sku_map["SKU-CHIPS-50"].id, version_number=1, is_active=True)
+        db.add(bom_50)
+        db.flush()
+        bom_items_50 = [
+            (mat_map["RM-POT-01"].id, Decimal("0.0500")),  # 50g potato
+            (mat_map["RM-OIL-01"].id, Decimal("0.0100")),  # 10ml oil
+            (mat_map["RM-SLT-01"].id, Decimal("0.0025")),  # 2.5g salt
+            (mat_map["RM-SPC-01"].id, Decimal("0.0025")),  # 2.5g spices
+            (mat_map["PM-PCH-50"].id, Decimal("1.0000")),  # 1 pouch
+            (mat_map["PM-BOX-01"].id, Decimal("0.0500")),  # 1 box packs 20 units (1/20 = 0.05)
+        ]
+        for mat_id, qty in bom_items_50:
+            db.add(BOMItem(bom_version_id=bom_50.id, material_id=mat_id, quantity_per_unit=qty))
         db.flush()
 
-    bom = db.query(BOMVersion).filter_by(sku_id=sku.id, version_number=1).first()
-    if not bom:
-        bom = BOMVersion(sku_id=sku.id, version_number=1, is_active=True)
-        db.add(bom)
+    # BOM for 100g Chips
+    bom_100 = db.query(BOMVersion).filter_by(sku_id=sku_map["SKU-CHIPS-100"].id, version_number=1).first()
+    if not bom_100:
+        bom_100 = BOMVersion(sku_id=sku_map["SKU-CHIPS-100"].id, version_number=1, is_active=True)
+        db.add(bom_100)
         db.flush()
-        bom_items = [
-            (mat_map["RM-001"].id, Decimal("0.2500")),  # 250g flour per unit
-            (mat_map["RM-002"].id, Decimal("0.0500")),  # 50ml oil per unit
-            (mat_map["PM-001"].id, Decimal("1.0000")),  # 1 box per unit
+        bom_items_100 = [
+            (mat_map["RM-POT-01"].id, Decimal("0.1000")),  # 100g potato
+            (mat_map["RM-OIL-01"].id, Decimal("0.0200")),  # 20ml oil
+            (mat_map["RM-SLT-01"].id, Decimal("0.0050")),  # 5g salt
+            (mat_map["RM-SPC-01"].id, Decimal("0.0050")),  # 5g spices
+            (mat_map["PM-PCH-100"].id, Decimal("1.0000")), # 1 pouch
+            (mat_map["PM-BOX-01"].id, Decimal("0.1000")),  # 1 box packs 10 units (1/10 = 0.10)
         ]
-        for mat_id, qty in bom_items:
-            db.add(
-                BOMItem(
-                    bom_version_id=bom.id, material_id=mat_id, quantity_per_unit=qty
-                )
-            )
+        for mat_id, qty in bom_items_100:
+            db.add(BOMItem(bom_version_id=bom_100.id, material_id=mat_id, quantity_per_unit=qty))
         db.flush()
 
     print("Seeding settings...")
@@ -295,6 +330,100 @@ def seed(db: Session) -> None:  # noqa: C901
         if not db.query(Setting).filter_by(key=key).first():
             db.add(Setting(key=key, value=value, description=desc, value_type=vtype))
     db.flush()
+
+    print("Seeding opening inventory...")
+    rmpm_wh = db.query(Warehouse).filter_by(name="RMPM-Main").first()
+    ods_wh = db.query(Warehouse).filter_by(name="ODS-Main").first()
+    
+    # Check if inventory exists
+    if not db.query(InventoryTransaction).first():
+        # Add opening stock to RMPM
+        for code, qty in [("RM-POT-01", 5000), ("RM-OIL-01", 1000), ("RM-SLT-01", 200), ("RM-SPC-01", 200), ("PM-FLM-01", 10000), ("PM-BOX-01", 5000), ("PM-PCH-50", 20000), ("PM-PCH-100", 20000)]:
+            db.add(InventoryTransaction(
+                warehouse_id=rmpm_wh.id,
+                material_id=mat_map[code].id,
+                quantity=Decimal(str(qty)),
+                type="IN",
+                notes="Initial Opening Balance"
+            ))
+        
+        # Add a tiny bit to ODS to show net calculations
+        for code, qty in [("RM-POT-01", 50), ("RM-OIL-01", 10), ("PM-BOX-01", 50)]:
+            db.add(InventoryTransaction(
+                warehouse_id=ods_wh.id,
+                material_id=mat_map[code].id,
+                quantity=Decimal(str(qty)),
+                type="IN",
+                notes="Opening Floor Stock"
+            ))
+        db.flush()
+
+    print("Seeding sample requests...")
+    if not db.query(MaterialRequest).first():
+        import uuid
+        from datetime import date
+        req_number = f"REQ-ODS-{str(uuid.uuid4())[:8].upper()}"
+        req = MaterialRequest(
+            request_date=date.today(),
+            request_number=req_number,
+            status="SUBMITTED",
+            ods_warehouse_id=ods_wh.id,
+            rmpm_warehouse_id=rmpm_wh.id,
+            notes="Morning Production Run - Line 1"
+        )
+        db.add(req)
+        db.flush()
+        
+        sku_50 = MaterialRequestSKU(
+            request_id=req.id,
+            sku_id=sku_map["SKU-CHIPS-50"].id,
+            bom_version_id=bom_50.id,
+            planned_production_qty=Decimal("5000") # 5000 units of 50g chips
+        )
+        db.add(sku_50)
+        
+        sku_100 = MaterialRequestSKU(
+            request_id=req.id,
+            sku_id=sku_map["SKU-CHIPS-100"].id,
+            bom_version_id=bom_100.id,
+            planned_production_qty=Decimal("2000") # 2000 units of 100g chips
+        )
+        db.add(sku_100)
+        db.flush()
+        
+        # We need to compute required items to render the request properly.
+        req_items_map = {}
+        # For 50g
+        for item in bom_items_50:
+            mat_id = item[0]
+            req_qty = item[1] * Decimal("5000")
+            req_items_map[mat_id] = req_items_map.get(mat_id, {"gross": Decimal("0"), "sku_id": sku_50.id})
+            req_items_map[mat_id]["gross"] += req_qty
+            
+        # For 100g
+        for item in bom_items_100:
+            mat_id = item[0]
+            req_qty = item[1] * Decimal("2000")
+            if mat_id not in req_items_map:
+                req_items_map[mat_id] = {"gross": Decimal("0"), "sku_id": sku_100.id}
+            req_items_map[mat_id]["gross"] += req_qty
+            
+        # Deduct ODS floor stock
+        floor_stock = {mat_map["RM-POT-01"].id: Decimal("50"), mat_map["RM-OIL-01"].id: Decimal("10"), mat_map["PM-BOX-01"].id: Decimal("50")}
+        
+        for mat_id, data in req_items_map.items():
+            avail = floor_stock.get(mat_id, Decimal("0"))
+            net = max(Decimal("0"), data["gross"] - avail)
+            db.add(MaterialRequestItem(
+                request_sku_id=data["sku_id"],
+                material_id=mat_id,
+                gross_required_qty=data["gross"],
+                remaining_from_previous_day=avail,
+                requested_qty=net,
+                approved_qty=Decimal("0"),
+                dispatched_qty=Decimal("0")
+            ))
+        db.flush()
 
     db.commit()
     print("Seed complete.")

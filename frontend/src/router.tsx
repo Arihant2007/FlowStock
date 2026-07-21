@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Loader2 } from 'lucide-react'
@@ -24,10 +24,17 @@ import { RMPMRequestDetailPage } from '@/pages/rmpm/RequestDetail'
 import { ReportsInventoryPage } from '@/pages/reports/Inventory'
 import { ReportsRequestsPage } from '@/pages/reports/Requests'
 import { ReportsTransactionsPage } from '@/pages/reports/Transactions'
+import { SettingsPage } from '@/pages/Settings'
+import { ForceChangePasswordPage } from '@/pages/ForceChangePassword'
+
 import { RequirePermission } from '@/components/RequirePermission'
 
+// ─── Guards ───────────────────────────────────────────────────────────────────
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, isLoading, mustChangePassword } = useAuth()
+  const location = useLocation()
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -35,14 +42,38 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
       </div>
     )
   }
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
+
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+
+  // If must_change_password is true and user is NOT on the change-password page,
+  // redirect them there and prevent access to everything else.
+  if (mustChangePassword && location.pathname !== '/change-password') {
+    return <Navigate to="/change-password" replace />
+  }
+
+  return <>{children}</>
 }
+
+// ─── Router ───────────────────────────────────────────────────────────────────
 
 export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public */}
         <Route path="/login" element={<LoginPage />} />
+
+        {/* Forced password change — authenticated but outside AppLayout */}
+        <Route
+          path="/change-password"
+          element={
+            <RequireAuth>
+              <ForceChangePasswordPage />
+            </RequireAuth>
+          }
+        />
+
+        {/* Protected app shell */}
         <Route
           path="/"
           element={
@@ -81,7 +112,14 @@ export function AppRouter() {
           <Route path="reports/inventory" element={<RequirePermission permission="reports:read"><ReportsInventoryPage /></RequirePermission>} />
           <Route path="reports/requests" element={<RequirePermission permission="reports:read"><ReportsRequestsPage /></RequirePermission>} />
           <Route path="reports/transactions" element={<RequirePermission permission="reports:read"><ReportsTransactionsPage /></RequirePermission>} />
+
+          {/* Personal settings */}
+          <Route path="settings" element={<SettingsPage />} />
+
+
         </Route>
+
+        {/* Catch-all */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>

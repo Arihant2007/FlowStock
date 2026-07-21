@@ -2,6 +2,7 @@
 
 import uuid
 
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -49,11 +50,12 @@ class UserOut(BaseModel):
 
     public_id: uuid.UUID
     username: str
-    email: str
+    email: Optional[str] = None
     full_name: str
     is_active: bool
     role_name: str
     permissions: list[str]
+    must_change_password: bool
 
     @classmethod
     def from_orm_user(cls, user: object) -> "UserOut":
@@ -70,6 +72,7 @@ class UserOut(BaseModel):
             is_active=user.is_active,
             role_name=user.role.name,
             permissions=perms,
+            must_change_password=user.must_change_password,
         )
 
 
@@ -77,7 +80,7 @@ class CreateUserRequest(BaseModel):
     """Admin payload to create a new system user."""
 
     username: str = Field(..., min_length=3, max_length=100)
-    email: EmailStr
+    email: Optional[EmailStr] = None
     full_name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(
         ...,
@@ -85,3 +88,16 @@ class CreateUserRequest(BaseModel):
         description="Password must be at least 8 characters.",
     )
     role_public_id: uuid.UUID
+
+
+class ChangePasswordRequest(BaseModel):
+    """Payload for POST /auth/me/password (personal password change)."""
+
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, description="New password, min 8 characters.")
+
+
+class UpdateProfileRequest(BaseModel):
+    """Payload for PATCH /auth/me/profile."""
+    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)

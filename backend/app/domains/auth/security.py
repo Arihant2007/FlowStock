@@ -41,6 +41,9 @@ def hash_password(plain_password: str) -> str:
     return password_hash.hash(plain_password)
 
 
+
+
+
 def verify_password(plain_password: str, hashed: str) -> bool:
     """Return True if the plain password matches the Argon2id hash."""
     try:

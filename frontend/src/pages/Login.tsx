@@ -1,19 +1,16 @@
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNavigate, Navigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { getErrorMessage } from '@/lib/utils'
-import { Factory, Lock, User } from 'lucide-react'
-import { useState } from 'react'
+import { User, Lock, Eye, EyeOff } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 const loginSchema = z.object({
-  identifier: z.string().min(3, 'Enter your username or email'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  identifier: z.string().min(1, 'Username is required'),
+  password: z.string().min(1, 'Password is required'),
 })
 
 type LoginForm = z.infer<typeof loginSchema>
@@ -22,6 +19,7 @@ export function LoginPage() {
   const { login, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
 
   const {
     register,
@@ -41,91 +39,158 @@ export function LoginPage() {
     }
   }
 
+  // Animation variants
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { staggerChildren: 0.1, delayChildren: 0.2 },
+    },
+  }
+
+  const itemVariants = {
+    hidden: { y: 20, opacity: 0 },
+    visible: {
+      y: 0,
+      opacity: 1,
+      transition: { type: 'spring' as const, stiffness: 100, damping: 15 },
+    },
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      {/* Background decorations */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full bg-purple-500/10 blur-3xl" />
+    <div className="relative min-h-screen flex items-center justify-center bg-black overflow-hidden font-sans selection:bg-[#2563EB] selection:text-white">
+      {/* Background artwork shifted slightly to the right so brightest streaks don't intersect the form */}
+      <img
+        src="/images/itc-login-bg.png"
+        alt="ITC Abstract Background"
+        className="absolute inset-0 w-full h-full object-cover object-[75%_center] opacity-90"
+      />
+
+      {/* Abstract Animated Glow overlay */}
+      <div className="absolute inset-0 pointer-events-none">
+        <motion.div
+          animate={{
+            scale: [1, 1.05, 1],
+            opacity: [0.25, 0.45, 0.25],
+          }}
+          transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute top-1/2 right-[-5%] w-[55%] h-[100%] -translate-y-1/2 bg-gradient-to-l from-[#ff4d00]/30 via-[#aa0000]/15 to-transparent rounded-full blur-[140px] mix-blend-screen"
+        />
+        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-overlay"></div>
       </div>
 
-      <div className="relative w-full max-w-md space-y-6">
-        {/* Logo */}
-        <div className="text-center">
-          <div className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 shadow-xl shadow-blue-500/30 mb-4">
-            <Factory className="h-8 w-8 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-white">ITC WMS</h1>
-          <p className="text-slate-400 text-sm mt-1">Warehouse Management System</p>
-        </div>
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="relative z-10 w-full max-w-[480px] px-6 sm:px-8 py-12 flex flex-col items-center"
+      >
+        {/* Official ITC Logo (Flat Pure White Monochrome, No Glow) */}
+        <motion.div variants={itemVariants} className="mb-10 text-center flex flex-col items-center">
+          <img
+            src="/images/itc-logo-white.png"
+            alt="ITC Limited Logo"
+            className="h-[74px] w-auto object-contain opacity-95"
+          />
+        </motion.div>
 
-        <Card className="border-slate-700 bg-slate-800/50 backdrop-blur-sm shadow-2xl">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-xl text-white">Sign in</CardTitle>
-            <CardDescription className="text-slate-400">
-              Enter your credentials to access the system
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              {serverError && (
-                <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400">
-                  {serverError}
-                </div>
-              )}
+        {/* Heading */}
+        <motion.div variants={itemVariants} className="mb-12 w-full text-center">
+          <h1
+            className="text-4xl sm:text-[44px] text-white tracking-tight leading-tight"
+            style={{ fontFamily: '"Playfair Display", "Cormorant Garamond", serif' }}
+          >
+            Welcome Back !
+          </h1>
+        </motion.div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="identifier" className="text-slate-300">
-                  Username or Email
-                </Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                  <Input
-                    id="identifier"
-                    placeholder="admin"
-                    className="pl-9 bg-slate-900/50 border-slate-600 text-white placeholder:text-slate-600 focus-visible:ring-blue-500"
-                    {...register('identifier')}
-                  />
-                </div>
-                {errors.identifier && (
-                  <p className="text-xs text-red-400">{errors.identifier.message}</p>
-                )}
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-slate-300">
-                  Password
-                </Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="••••••••"
-                    className="pl-9 bg-slate-900/50 border-slate-600 text-white placeholder:text-slate-600 focus-visible:ring-blue-500"
-                    {...register('password')}
-                  />
-                </div>
-                {errors.password && (
-                  <p className="text-xs text-red-400">{errors.password.message}</p>
-                )}
-              </div>
-
-              <Button
-                type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20 mt-2"
-                isLoading={isSubmitting}
+        {/* Form */}
+        <form onSubmit={handleSubmit(onSubmit)} className="w-full space-y-6">
+          <AnimatePresence>
+            {serverError && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="rounded-xl bg-red-500/15 border border-red-500/30 px-4 py-3 text-sm text-red-100 text-center backdrop-blur-md"
               >
-                Sign in
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                {serverError}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        <p className="text-center text-xs text-slate-600">
-          ITC Plant · FMCG Inventory Transfer System v1.0
-        </p>
-      </div>
+          {/* Username Field */}
+          <motion.div variants={itemVariants} className="space-y-2">
+            <label htmlFor="identifier" className="block text-xs font-semibold text-slate-200 uppercase tracking-wider ml-1">
+              Username / Employee ID
+            </label>
+            <div className="relative group">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <User className="h-5 w-5 text-slate-400 transition-colors duration-300 group-focus-within:text-[#2563EB]" />
+              </div>
+              <input
+                id="identifier"
+                type="text"
+                placeholder="Enter your Username or Employee ID"
+                className="w-full pl-11 pr-4 h-[54px] bg-slate-900/60 backdrop-blur-md border border-white/30 rounded-2xl text-white placeholder:text-slate-400 text-sm font-medium transition-all duration-300 focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/40 focus:shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:bg-slate-900/80 hover:border-white/40"
+                {...register('identifier')}
+              />
+            </div>
+            {errors.identifier && (
+              <p className="text-xs font-medium text-red-400 ml-1 mt-1">{errors.identifier.message}</p>
+            )}
+          </motion.div>
+
+          {/* Password Field */}
+          <motion.div variants={itemVariants} className="space-y-2">
+            <label htmlFor="password" className="block text-xs font-semibold text-slate-200 uppercase tracking-wider ml-1">
+              Password
+            </label>
+            <div className="relative group">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <Lock className="h-5 w-5 text-slate-400 transition-colors duration-300 group-focus-within:text-[#2563EB]" />
+              </div>
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Enter your password"
+                className="w-full pl-11 pr-12 h-[54px] bg-slate-900/60 backdrop-blur-md border border-white/30 rounded-2xl text-white placeholder:text-slate-400 text-sm font-medium transition-all duration-300 focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/40 focus:shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:bg-slate-900/80 hover:border-white/40"
+                {...register('password')}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white transition-colors focus:outline-none"
+              >
+                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
+            </div>
+            {errors.password && (
+              <p className="text-xs font-medium text-red-400 ml-1 mt-1">{errors.password.message}</p>
+            )}
+          </motion.div>
+
+          {/* Sign In Button with ITC Blue hover state and loading animation */}
+          <motion.div variants={itemVariants} className="pt-3">
+            <motion.button
+              whileHover={{ scale: 1.015 }}
+              whileTap={{ scale: 0.985 }}
+              type="submit"
+              disabled={isSubmitting}
+              className="relative w-full h-[54px] rounded-2xl bg-[#0F4C81] hover:bg-[#2563EB] text-white font-semibold text-sm tracking-wide shadow-lg shadow-blue-900/30 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center"
+            >
+              {isSubmitting ? (
+                <div className="flex items-center gap-2">
+                  <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Authenticating...</span>
+                </div>
+              ) : (
+                <span>Sign In</span>
+              )}
+            </motion.button>
+          </motion.div>
+        </form>
+      </motion.div>
     </div>
   )
 }

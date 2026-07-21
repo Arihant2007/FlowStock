@@ -2,6 +2,19 @@
 
 ## System Overview
 
+```mermaid
+flowchart TD
+    Client["Web Browser (React/Vite)"]
+    API["FastAPI Backend"]
+    DB[("PostgreSQL 16")]
+    Background["Background Tasks"]
+
+    Client <-->|REST API / JWT| API
+    API <-->|SQLAlchemy / Alembic| DB
+    API -->|Dispatches| Background
+    Background -->|Updates| DB
+```
+
 The FMCG WMS is a single-tenant monolith built using Domain-Driven Design (DDD). All business logic is isolated within domain modules. Domains communicate via direct service calls wrapped inside a single database transaction — no event bus in V1.
 
 ## Domain Boundaries

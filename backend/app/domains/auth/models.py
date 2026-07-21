@@ -1,6 +1,7 @@
 """Auth domain models: User, Role, Permission, RolePermission, RefreshSession, LoginAttempt."""
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -47,6 +48,7 @@ class Role(AuditedModel):
     )
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     permissions: Mapped[list["RolePermission"]] = relationship(
         "RolePermission", back_populates="role"
@@ -94,7 +96,7 @@ class User(AuditedModel):
     )
 
     username: Mapped[str] = mapped_column(String(100), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -114,11 +116,33 @@ class User(AuditedModel):
     locked_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
-        comment="Account locked until this UTC time. NULL = not locked.",
+        comment="Account locked until this UTC time. NULL = not locked. Auto-lockout only.",
+    )
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Admin-imposed lock. True = account is locked regardless of locked_until.",
+    )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="When True, user must set a new password before accessing the application.",
+    )
+    password_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="UTC timestamp of the last successful password change or admin reset.",
+    )
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="UTC timestamp of the last successful login.",
     )
 
     role: Mapped["Role"] = relationship("Role", back_populates="users")
-    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
+    warehouse: Mapped["Warehouse"] = relationship("app.domains.master.models.Warehouse")
     refresh_sessions: Mapped[list["RefreshSession"]] = relationship(
         "RefreshSession", back_populates="user", cascade="all, delete-orphan"
     )

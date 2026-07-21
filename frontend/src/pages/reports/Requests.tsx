@@ -1,14 +1,18 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { reportsApi, downloadBlob } from '@/api/reports'
-import { Card, CardContent } from '@/components/ui/card'
 import { Table, Tr, Td } from '@/components/ui/table'
 import { Pagination } from '@/components/ui/pagination'
-import { FileDown } from 'lucide-react'
+import { MetricCard } from '@/components/enterprise/MetricCard'
+import { PageHeader } from '@/components/enterprise/PageHeader'
+import { TableToolbar } from '@/components/enterprise/TableToolbar'
+import { StatusBadge } from '@/components/enterprise/StatusBadge'
+import { FileDown, CheckCircle2, List } from 'lucide-react'
 import { ExportButton } from '@/components/ui/export-button'
 
 export function ReportsRequestsPage() {
   const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['reports', 'requests', page],
@@ -25,60 +29,99 @@ export function ReportsRequestsPage() {
     }
   }
 
-  const requests = data?.data ?? []
+  const allRequests = useMemo(() => data?.data ?? [], [data?.data])
   const meta = data?.meta
 
+  const requests = useMemo(() => {
+    return allRequests.filter((req: any) =>
+      `REQ-${req.id}`.toLowerCase().includes(search.toLowerCase())
+    )
+  }, [allRequests, search])
+
+  const completedCount = useMemo(
+    () =>
+      allRequests.filter((req: any) => req.status === 'CLOSED' || req.status === 'RECEIVED').length,
+    [allRequests]
+  )
+  const totalSkus = useMemo(
+    () => allRequests.reduce((sum: number, req: any) => sum + (req.skus?.length || 0), 0),
+    [allRequests]
+  )
+
   return (
-    <div className="space-y-4 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FileDown className="h-6 w-6" /> Material Requests Report
-          </h1>
-          <p className="text-muted-foreground text-sm">Review details of daily material requests including planned vs actual dispatch.</p>
-        </div>
-        <ExportButton onExport={handleExport} disabled={requests.length === 0} />
+    <div className="space-y-6">
+      <PageHeader
+        title="Material Requests Report"
+        subtitle="Audit logs of ODS material requests, fulfillment stages, and planned SKU counts"
+        badgeText={meta?.total ?? allRequests.length}
+      >
+        <ExportButton onExport={handleExport} disabled={allRequests.length === 0} />
+      </PageHeader>
+
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <MetricCard
+          title="Total Logged Requests"
+          value={meta?.total || allRequests.length}
+          subtext="ODS Supply Stream"
+          icon={List}
+        />
+        <MetricCard
+          title="Completed & Fulfilled"
+          value={completedCount}
+          subtext="Closed / Received Requests"
+          icon={CheckCircle2}
+          badge={{ text: 'Completed', variant: 'success' }}
+        />
+        <MetricCard
+          title="Total Production SKUs"
+          value={totalSkus}
+          subtext="SKU Batches Included"
+          icon={FileDown}
+          badge={{ text: 'Batch Count', variant: 'info' }}
+        />
       </div>
 
-      <Card>
-        <CardContent className="pt-4 pb-0">
-          <Table
-            headers={['Request ID', 'Date', 'Status', 'SKUs', 'Requested By']}
-            isLoading={isLoading}
-            isEmpty={requests.length === 0}
-            emptyMessage="No material requests found."
-          >
-            {requests.map((req: any) => (
-              <Tr key={req.id}>
-                <Td className="font-medium text-xs font-mono">REQ-{req.id}</Td>
-                <Td>{req.request_date}</Td>
-                <Td>
-                  <span className={`px-2 py-1 rounded text-xs font-semibold ${
-                    req.status === 'APPROVED' ? 'bg-blue-100 text-blue-800' :
-                    req.status === 'DISPATCHED' ? 'bg-indigo-100 text-indigo-800' :
-                    req.status === 'RECEIVED' ? 'bg-teal-100 text-teal-800' :
-                    req.status === 'CLOSED' ? 'bg-green-100 text-green-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {req.status}
-                  </span>
-                </Td>
-                <Td>{req.skus?.length || 0} SKUs</Td>
-                <Td className="text-muted-foreground">User {req.created_by}</Td>
-              </Tr>
-            ))}
-          </Table>
-        </CardContent>
+      {/* SadaxCart Table Container */}
+      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
+        <TableToolbar
+          searchQuery={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Search by request ID..."
+        />
+
+        <Table
+          headers={['Request Reference', 'Request Date', 'Fulfillment Status', 'Included SKUs', 'Operator ID']}
+          isLoading={isLoading}
+          isEmpty={requests.length === 0}
+          emptyMessage="No material request reports match query."
+          className="border-0 shadow-none rounded-none"
+        >
+          {requests.map((req: any) => (
+            <Tr key={req.id}>
+              <Td className="font-mono text-xs font-semibold text-blue-700">REQ-{req.id}</Td>
+              <Td className="text-slate-600 font-semibold text-xs">{req.request_date}</Td>
+              <Td>
+                <StatusBadge status={req.status} />
+              </Td>
+              <Td className="text-slate-900 font-medium text-xs">{req.skus?.length || 0} SKUs</Td>
+              <Td className="text-slate-500 text-xs">Operator #{req.created_by}</Td>
+            </Tr>
+          ))}
+        </Table>
+
         {meta && (
-          <Pagination
-            page={meta.page}
-            totalPages={meta.total_pages}
-            total={meta.total}
-            pageSize={meta.page_size}
-            onPageChange={setPage}
-          />
+          <div className="border-t border-slate-100 p-3 bg-slate-50/40">
+            <Pagination
+              page={meta.page}
+              totalPages={meta.total_pages}
+              total={meta.total}
+              pageSize={meta.page_size}
+              onPageChange={setPage}
+            />
+          </div>
         )}
-      </Card>
+      </div>
     </div>
   )
 }

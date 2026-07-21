@@ -7,12 +7,12 @@ import { masterApi } from '@/api/master'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Badge } from '@/components/ui/badge'
 import { Table, Tr, Td } from '@/components/ui/table'
 import { getErrorMessage, formatDate, formatQty } from '@/lib/utils'
-import { ArrowLeft, Check, Play, PackageCheck, CheckCircle2, XCircle } from 'lucide-react'
+import { StatusBadge } from '@/components/enterprise/StatusBadge'
+import { PageHeader } from '@/components/enterprise/PageHeader'
+import { ArrowLeft, Check, Play, PackageCheck, CheckCircle2, XCircle, ClipboardList, Layers, AlertCircle, FileSpreadsheet } from 'lucide-react'
 
 export function RMPMRequestDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -68,7 +68,6 @@ export function RMPMRequestDetailPage() {
     return Array.from(map.values())
   }, [request])
 
-  // Initialize approved quantities based on aggregated summary
   useEffect(() => {
     if (materialSummary.length > 0 && Object.keys(approvedQtys).length === 0) {
       const initial: Record<string, string> = {}
@@ -112,8 +111,25 @@ export function RMPMRequestDetailPage() {
     })
   }
 
-  if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading request...</div>
-  if (!request) return <div className="p-8 text-center text-muted-foreground">Request not found.</div>
+  if (isLoading)
+    return (
+      <div className="p-12 text-center flex flex-col items-center justify-center min-h-[50vh]">
+        <div className="w-8 h-8 border-4 border-blue-600/30 border-t-blue-600 rounded-full animate-spin mb-4" />
+        <p className="text-slate-500 font-medium text-sm">Loading Request Details...</p>
+      </div>
+    )
+
+  if (!request)
+    return (
+      <div className="p-12 text-center min-h-[50vh] flex items-center justify-center">
+        <div className="p-8 max-w-md mx-auto text-center rounded-2xl bg-white border border-slate-100 shadow-sm">
+          <AlertCircle className="h-12 w-12 text-slate-400 mx-auto mb-4" />
+          <h3 className="text-lg font-bold text-slate-900 mb-2">Request Not Found</h3>
+          <p className="text-slate-500 text-sm mb-6">The requested material transfer ID does not exist or has been archived.</p>
+          <Button onClick={() => navigate('/rmpm/requests')} className="rounded-xl">Go Back to Queue</Button>
+        </div>
+      </div>
+    )
 
   const isPendingApprove = request.status === 'SUBMITTED'
   const isApproved = request.status === 'APPROVED' || request.status === 'PARTIALLY_APPROVED'
@@ -121,197 +137,213 @@ export function RMPMRequestDetailPage() {
   const isReceived = request.status === 'RECEIVED'
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-5xl mx-auto pb-12">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/rmpm/requests')}>
-          <ArrowLeft className="h-5 w-5" />
+    <div className="space-y-6 pb-12">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => navigate('/rmpm/requests')}
+          className="rounded-xl shrink-0 h-10 w-10 border-slate-200 bg-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">Request {request.public_id.split('-')[0]}</h1>
-          <p className="text-muted-foreground text-sm">Created for {formatDate(request.request_date)}</p>
-        </div>
-        <div className="ml-auto">
-          <Badge label={request.status} variant="status" className="text-sm px-3 py-1" />
-        </div>
+        <PageHeader
+          title={`Material Request #${request.public_id}`}
+          subtitle={`Created for ODS production line on ${formatDate(request.request_date)}`}
+        >
+          <StatusBadge status={request.status} />
+        </PageHeader>
       </div>
 
       {request.notes && (
-        <Card className="bg-muted/30">
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground"><span className="font-semibold text-foreground">Notes:</span> {request.notes}</p>
-          </CardContent>
-        </Card>
+        <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-4 flex gap-3 shadow-sm">
+          <ClipboardList className="h-5 w-5 shrink-0 text-amber-700" />
+          <div>
+            <h4 className="font-bold text-amber-950 text-xs uppercase tracking-wider">ODS Request Notes</h4>
+            <p className="text-xs text-amber-900 mt-1 font-medium">{request.notes}</p>
+          </div>
+        </div>
       )}
 
-      {/* Action panel */}
-      <Card className="border-primary/20 shadow-sm">
-        <CardHeader className="bg-primary/5 pb-4 border-b border-primary/10 flex flex-row items-center justify-between">
-          <CardTitle className="text-lg">Workflow Actions</CardTitle>
-          <div className="flex gap-2">
+      {/* Action Control Panel */}
+      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+          <div>
+            <h3 className="font-bold text-slate-900 text-base">Approval & Fulfillment Pipeline</h3>
+            <p className="text-xs text-slate-500">Advance request status or modify allocated quantities</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
             {isPendingApprove && (
-              <Button size="sm" variant="destructive" onClick={() => actionMutation.mutate({ action: 'reject' })} isLoading={actionMutation.isPending}>
-                <XCircle className="h-4 w-4 mr-2" /> Reject
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-red-600 border-red-200 hover:bg-red-50 rounded-xl px-5 h-9 text-xs font-semibold"
+                onClick={() => actionMutation.mutate({ action: 'reject' })}
+                disabled={actionMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5 mr-1.5" /> Reject Request
               </Button>
             )}
             {isApproved && (
-              <Button size="sm" onClick={() => actionMutation.mutate({ action: 'dispatch' })} isLoading={actionMutation.isPending}>
-                <Play className="h-4 w-4 mr-2" /> Mark Dispatched
+              <Button
+                size="sm"
+                className="rounded-xl px-5 h-9 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                onClick={() => actionMutation.mutate({ action: 'dispatch' })}
+                disabled={actionMutation.isPending}
+              >
+                <Play className="h-3.5 w-3.5 mr-1.5" /> Mark Dispatched
               </Button>
             )}
             {isDispatched && (
-              <Button size="sm" onClick={() => actionMutation.mutate({ action: 'receive' })} isLoading={actionMutation.isPending}>
-                <PackageCheck className="h-4 w-4 mr-2" /> Mark Received
+              <Button
+                size="sm"
+                className="rounded-xl px-5 h-9 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                onClick={() => actionMutation.mutate({ action: 'receive' })}
+                disabled={actionMutation.isPending}
+              >
+                <PackageCheck className="h-3.5 w-3.5 mr-1.5" /> Confirm Received
               </Button>
             )}
             {isReceived && (
-              <Button size="sm" variant="secondary" onClick={() => actionMutation.mutate({ action: 'close' })} isLoading={actionMutation.isPending}>
-                <CheckCircle2 className="h-4 w-4 mr-2" /> Close Request
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-xl px-5 h-9 text-xs font-semibold border-slate-200 text-slate-700"
+                onClick={() => actionMutation.mutate({ action: 'close' })}
+                disabled={actionMutation.isPending}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1.5 text-emerald-600" /> Close Transfer
               </Button>
             )}
           </div>
-        </CardHeader>
+        </div>
+
         {isPendingApprove && (
-          <CardContent className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-muted/10">
-            <div className="space-y-1.5 md:col-span-1">
-              <Label>Source Warehouse (RMPM)</Label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
+            <div className="space-y-1.5 md:col-span-2">
+              <Label className="text-xs font-semibold text-slate-700">Source RMPM Warehouse</Label>
               <Select value={rmpmWarehouse} onValueChange={setRmpmWarehouse}>
-                <SelectTrigger><SelectValue placeholder="Select dispatch source..." /></SelectTrigger>
-                <SelectContent>{rmpmWarehouses.map((w) => <SelectItem key={w.public_id} value={w.public_id}>{w.name}</SelectItem>)}</SelectContent>
+                <SelectTrigger className="bg-slate-50/50 border-slate-200 rounded-xl h-10 text-xs">
+                  <SelectValue placeholder="Select fulfillment warehouse..." />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  {rmpmWarehouses.map((w) => (
+                    <SelectItem key={w.public_id} value={w.public_id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
-            <div className="md:col-span-2 flex justify-end mt-2">
-              <Button onClick={handleApprove} isLoading={actionMutation.isPending} disabled={!rmpmWarehouse}>
-                <Check className="h-4 w-4 mr-2" /> Approve Quantities
+            <div className="md:col-span-1 flex items-end">
+              <Button
+                onClick={handleApprove}
+                disabled={actionMutation.isPending || !rmpmWarehouse}
+                className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white h-10 text-xs font-semibold shadow-sm"
+              >
+                <Check className="h-4 w-4 mr-1.5" /> Approve & Reserve Quantities
               </Button>
             </div>
-          </CardContent>
+          </div>
         )}
-      </Card>
+      </div>
 
       {/* Aggregated Material Summary */}
-      <Card>
-        <CardHeader className="bg-primary/5 pb-3">
-          <CardTitle className="text-base">Aggregated Material Summary</CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0 px-0">
-          <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Status', 'Dispatched', 'Received']}>
-            {materialSummary.map((mat) => {
-              let statusLabel = ''
-              let statusColor = ''
-              if (!isPendingApprove) {
-                if (mat.approved_qty >= mat.requested_qty) {
-                  statusLabel = 'Available'
-                  statusColor = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                } else if (mat.approved_qty > 0) {
-                  statusLabel = 'Partial'
-                  statusColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                } else {
-                  statusLabel = 'Shortage'
-                  statusColor = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
-                }
-              }
+      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden space-y-2">
+        <div className="p-5 border-b border-slate-100 bg-slate-50/50">
+          <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+            <Layers className="h-5 w-5 text-blue-600" /> Aggregated Material Requirements
+          </h3>
+          <p className="text-xs text-slate-500">Gross required vs leftover and net requested quantities</p>
+        </div>
 
-              return (
-              <Tr key={mat.material_public_id} className={!isPendingApprove && mat.approved_qty < mat.requested_qty ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
-                <Td>
-                  <div className="font-medium">{mat.material_name}</div>
-                  <div className="text-xs text-muted-foreground">{mat.material_code}</div>
-                </Td>
-                <Td><Badge label={mat.material_type} variant={mat.material_type.toLowerCase() as any} /></Td>
-                <Td className="font-mono text-sm">{formatQty(mat.gross_required_qty)}</Td>
-                <Td className="font-mono text-sm text-orange-600">{formatQty(mat.remaining_from_previous_day)}</Td>
-                <Td className="font-mono text-sm font-semibold">{formatQty(mat.requested_qty)}</Td>
-                <Td>
-                  {isPendingApprove ? (
-                    <div className="w-32">
-                      <Input
-                        type="number"
-                        step="0.0001"
-                        value={approvedQtys[mat.material_public_id] ?? ''}
-                        onChange={(e) => setApprovedQtys((p) => ({ ...p, [mat.material_public_id]: e.target.value }))}
-                      />
-                    </div>
-                  ) : (
-                    <span className="font-mono text-sm font-bold text-primary">{mat.approved_qty ? formatQty(mat.approved_qty) : '-'}</span>
-                  )}
-                </Td>
-                <Td>
-                  {!isPendingApprove && statusLabel && (
-                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${statusColor}`}>
-                      {statusLabel}
-                    </span>
-                  )}
-                </Td>
-                <Td className="font-mono text-sm text-blue-600">{mat.dispatched_qty ? formatQty(mat.dispatched_qty) : '-'}</Td>
-                <Td className="font-mono text-sm text-green-600">{mat.received_qty ? formatQty(mat.received_qty) : '-'}</Td>
-              </Tr>
-            )})}
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* SKU Breakdown (Requested Items) */}
-      <div className="space-y-6">
-        {request.skus.map((sku, index) => (
-          <Card key={sku.public_id}>
-            <CardHeader className="bg-muted/30 pb-3">
-              <CardTitle className="text-base flex items-center justify-between">
-                <span>SKU #{index + 1}</span>
-                <Badge label={`Plan: ${formatQty(sku.planned_production_qty)} units`} variant="default" />
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0 px-0">
-              <Table headers={['Material', 'Type', 'Gross Req', 'Leftover', 'Net Request', 'Approved', 'Status', 'Dispatched', 'Received']}>
-                {sku.items.map((item) => {
-                  let statusLabel = ''
-                  let statusColor = ''
-                  const approved = Number(item.approved_qty || 0)
-                  const requested = Number(item.requested_qty || 0)
-                  if (!isPendingApprove) {
-                    if (approved >= requested) {
-                      statusLabel = 'Available'
-                      statusColor = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                    } else if (approved > 0) {
-                      statusLabel = 'Partial'
-                      statusColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                    } else {
-                      statusLabel = 'Shortage'
-                      statusColor = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+        <Table
+          headers={['Material', 'Type', 'Gross Req', 'ODS Leftover', 'Net Request', isPendingApprove ? 'Approve Qty' : 'Approved', 'Status', 'Dispatched', 'Received']}
+          className="border-0 shadow-none rounded-none"
+        >
+          {materialSummary.map((mat) => (
+            <Tr key={mat.material_public_id}>
+              <Td>
+                <div className="font-semibold text-slate-900 text-xs">{mat.material_name}</div>
+                <div className="font-mono text-[11px] text-slate-500 mt-0.5">{mat.material_code}</div>
+              </Td>
+              <Td>
+                <StatusBadge status={mat.material_type} label={mat.material_type === 'RM' ? 'RM' : 'PM'} />
+              </Td>
+              <Td className="text-slate-700 font-medium text-xs">{formatQty(mat.gross_required_qty)}</Td>
+              <Td className="text-amber-700 font-medium text-xs">{formatQty(mat.remaining_from_previous_day)}</Td>
+              <Td className="font-bold text-blue-700 text-xs">{formatQty(mat.requested_qty)}</Td>
+              <Td>
+                {isPendingApprove ? (
+                  <Input
+                    type="number"
+                    step="0.0001"
+                    value={approvedQtys[mat.material_public_id] ?? ''}
+                    onChange={(e) =>
+                      setApprovedQtys((p) => ({ ...p, [mat.material_public_id]: e.target.value }))
                     }
-                  }
-                  
-                  return (
-                  <Tr key={item.public_id} className={!isPendingApprove && approved < requested ? 'bg-red-50/50 dark:bg-red-950/20' : ''}>
+                    className="w-28 h-8 rounded-lg bg-slate-50 border-slate-200 text-xs font-mono font-bold"
+                  />
+                ) : (
+                  <span className="font-bold text-slate-900 text-xs">{formatQty(mat.approved_qty)}</span>
+                )}
+              </Td>
+              <Td>
+                {!isPendingApprove && (
+                  <StatusBadge
+                    status={mat.approved_qty >= mat.requested_qty ? 'NORMAL' : 'WARNING'}
+                    label={mat.approved_qty >= mat.requested_qty ? 'Full' : 'Partial'}
+                  />
+                )}
+              </Td>
+              <Td className="text-blue-600 font-medium text-xs">{formatQty(mat.dispatched_qty)}</Td>
+              <Td className="text-emerald-600 font-medium text-xs">{formatQty(mat.received_qty)}</Td>
+            </Tr>
+          ))}
+        </Table>
+      </div>
+
+      {/* SKU Breakdown */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+          <FileSpreadsheet className="h-5 w-5 text-slate-500" /> Production Breakdown by SKU
+        </h3>
+
+        <div className="space-y-4">
+          {request.skus.map((sku: any, index: number) => (
+            <div key={sku.public_id} className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between p-4 bg-slate-50/60 border-b border-slate-100">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm">SKU #{index + 1}: {sku.sku_name || 'Production SKU'}</h4>
+                </div>
+                <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700 border border-blue-100">
+                  Plan: {formatQty(sku.planned_production_qty)} units
+                </span>
+              </div>
+
+              <Table
+                headers={['Material', 'Type', 'Gross Req', 'ODS Leftover', 'Net Request', 'Approved', 'Dispatched', 'Received']}
+                className="border-0 shadow-none rounded-none"
+              >
+                {sku.items.map((item: any) => (
+                  <Tr key={item.public_id}>
+                    <Td className="font-medium text-slate-900 text-xs">{item.material_name}</Td>
                     <Td>
-                      <div className="font-medium">{item.material_name}</div>
-                      <div className="text-xs text-muted-foreground">{item.material_code}</div>
+                      <StatusBadge status={item.material_type} />
                     </Td>
-                    <Td><Badge label={item.material_type} variant={item.material_type.toLowerCase() as any} /></Td>
-                    <Td className="font-mono text-sm">{formatQty(item.gross_required_qty)}</Td>
-                    <Td className="font-mono text-sm text-orange-600">{formatQty(item.remaining_from_previous_day)}</Td>
-                    <Td className="font-mono text-sm font-semibold">{formatQty(item.requested_qty)}</Td>
-                    <Td>
-                      {isPendingApprove ? (
-                        <span className="text-xs text-muted-foreground italic">Auto-allocated</span>
-                      ) : (
-                        <span className="font-mono text-sm font-bold text-primary">{item.approved_qty ? formatQty(item.approved_qty) : '-'}</span>
-                      )}
-                    </Td>
-                    <Td>
-                      {!isPendingApprove && statusLabel && (
-                        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${statusColor}`}>
-                          {statusLabel}
-                        </span>
-                      )}
-                    </Td>
-                    <Td className="font-mono text-sm text-blue-600">{item.dispatched_qty ? formatQty(item.dispatched_qty) : '-'}</Td>
-                    <Td className="font-mono text-sm text-green-600">{item.received_qty ? formatQty(item.received_qty) : '-'}</Td>
+                    <Td className="text-xs">{formatQty(item.gross_required_qty)}</Td>
+                    <Td className="text-xs text-amber-700 font-medium">{formatQty(item.remaining_from_previous_day)}</Td>
+                    <Td className="text-xs font-bold text-blue-700">{formatQty(item.requested_qty)}</Td>
+                    <Td className="text-xs font-semibold text-slate-900">{formatQty(item.approved_qty)}</Td>
+                    <Td className="text-xs text-blue-600 font-medium">{formatQty(item.dispatched_qty)}</Td>
+                    <Td className="text-xs text-emerald-600 font-medium">{formatQty(item.received_qty)}</Td>
                   </Tr>
-                )})}
+                ))}
               </Table>
-            </CardContent>
-          </Card>
-        ))}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

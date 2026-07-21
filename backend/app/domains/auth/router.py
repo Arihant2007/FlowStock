@@ -18,11 +18,13 @@ from app.core.responses import ok
 from app.domains.auth.dependencies import get_current_user, require_permission
 from app.domains.auth.models import User
 from app.domains.auth.schemas import (
+    ChangePasswordRequest,
     CreateUserRequest,
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
     TokenResponse,
+    UpdateProfileRequest,
     UserOut,
 )
 from app.domains.auth.service import AuthService
@@ -130,3 +132,35 @@ def create_user(
     user = AuthService(db).create_user(payload, created_by=current_user.id)
     db.commit()
     return ok(UserOut.from_orm_user(user).model_dump(), message="User created.")
+
+
+@router.post("/me/password", response_model=dict, status_code=status.HTTP_200_OK)
+def change_own_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Change the authenticated user's own password.
+
+    Validates the current password, hashes the new one, clears
+    must_change_password, and revokes all other active sessions.
+    """
+    AuthService(db).change_own_password(
+        current_user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    db.commit()
+    return ok({}, message="Password changed successfully. Please log in again.")
+
+
+@router.patch("/me/profile", response_model=dict, status_code=status.HTTP_200_OK)
+def update_own_profile(
+    payload: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Change the authenticated user's profile (e.g. username)."""
+    user = AuthService(db).update_own_profile(current_user, payload)
+    db.commit()
+    return ok(UserOut.from_orm_user(user).model_dump(), message="Profile updated.")
