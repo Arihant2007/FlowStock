@@ -466,14 +466,21 @@ class RequestService:
             for sku_line in request.skus:
                 for item in sku_line.items:
                     if item.approved_qty and item.approved_qty > 0:
-                        self._inventory.transfer(
+                        self._inventory.release_reservation(
                             material_id=item.material_id,
                             source_warehouse_id=request.rmpm_warehouse_id,
-                            destination_warehouse_id=request.ods_warehouse_id,
                             quantity=item.approved_qty,
                             reference_type="MATERIAL_REQUEST",
                             reference_id=request.id,
-                            transferred_by=dispatched_by,
+                            released_by=dispatched_by,
+                        )
+                        self._inventory.dispatch_transfer(
+                            material_id=item.material_id,
+                            source_warehouse_id=request.rmpm_warehouse_id,
+                            quantity=item.approved_qty,
+                            reference_type="MATERIAL_REQUEST",
+                            reference_id=request.id,
+                            dispatched_by=dispatched_by,
                         )
                         item.dispatched_qty = item.approved_qty
                         item.version += 1
@@ -520,6 +527,14 @@ class RequestService:
         for sku_line in request.skus:
             for item in sku_line.items:
                 if item.dispatched_qty and item.dispatched_qty > 0:
+                    self._inventory.receive_transfer(
+                        material_id=item.material_id,
+                        destination_warehouse_id=request.ods_warehouse_id,
+                        quantity=item.dispatched_qty,
+                        reference_type="MATERIAL_REQUEST",
+                        reference_id=request.id,
+                        received_by=received_by,
+                    )
                     item.received_qty = item.dispatched_qty
                     item.version += 1
                     item.updated_by = received_by

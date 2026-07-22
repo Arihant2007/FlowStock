@@ -340,21 +340,27 @@ def seed(db: Session) -> None:  # noqa: C901
         # Add opening stock to RMPM
         for code, qty in [("RM-POT-01", 5000), ("RM-OIL-01", 1000), ("RM-SLT-01", 200), ("RM-SPC-01", 200), ("PM-FLM-01", 10000), ("PM-BOX-01", 5000), ("PM-PCH-50", 20000), ("PM-PCH-100", 20000)]:
             db.add(InventoryTransaction(
-                warehouse_id=rmpm_wh.id,
+                destination_warehouse_id=rmpm_wh.id,
                 material_id=mat_map[code].id,
                 quantity=Decimal(str(qty)),
-                type="IN",
-                notes="Initial Opening Balance"
+                transaction_type="RECEIPT",
+                notes="Initial Opening Balance",
+                reference_type="MANUAL_ADJUSTMENT",
+                reference_id=1,
+                created_by=1
             ))
         
         # Add a tiny bit to ODS to show net calculations
         for code, qty in [("RM-POT-01", 50), ("RM-OIL-01", 10), ("PM-BOX-01", 50)]:
             db.add(InventoryTransaction(
-                warehouse_id=ods_wh.id,
+                destination_warehouse_id=ods_wh.id,
                 material_id=mat_map[code].id,
                 quantity=Decimal(str(qty)),
-                type="IN",
-                notes="Opening Floor Stock"
+                transaction_type="RECEIPT",
+                notes="Opening Floor Stock",
+                reference_type="MANUAL_ADJUSTMENT",
+                reference_id=1,
+                created_by=1
             ))
         db.flush()
 

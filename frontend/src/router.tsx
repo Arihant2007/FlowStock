@@ -18,6 +18,7 @@ import { EODCountPage } from '@/pages/inventory/EODCount'
 import { TransactionHistoryPage } from '@/pages/inventory/TransactionHistory'
 import { VarianceReportPage } from '@/pages/inventory/VarianceReport'
 import { NewRequestPage } from '@/pages/ods/NewRequest'
+import { ODSUploadPage } from '@/pages/ods/Upload'
 import { ODSRequestsPage } from '@/pages/ods/Requests'
 import { RMPMRequestsPage } from '@/pages/rmpm/Requests'
 import { RMPMRequestDetailPage } from '@/pages/rmpm/RequestDetail'
@@ -102,6 +103,7 @@ export function AppRouter() {
 
           {/* ODS */}
           <Route path="ods/new-request" element={<RequirePermission permission="requests:create"><NewRequestPage /></RequirePermission>} />
+          <Route path="ods/upload" element={<RequirePermission permission="requests:create"><ODSUploadPage /></RequirePermission>} />
           <Route path="ods/requests" element={<RequirePermission permission="requests:read"><ODSRequestsPage /></RequirePermission>} />
 
           {/* RMPM */}

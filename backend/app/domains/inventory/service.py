@@ -36,11 +36,10 @@ logger = get_logger(__name__)
 
 # Required columns for the RMPM Opening Balance upload template.
 OPENING_BALANCE_REQUIRED_COLUMNS = {
+    "Business Date",
     "Material Code",
-    "Quantity",
-    "UoM",
-    "Warehouse",
-    "Date",
+    "Material Name",
+    "Current Stock",
 }
 
 
@@ -437,6 +436,20 @@ class InventoryService:
             return None, ["The uploaded file contains no data rows."]
 
         return df, []
+        
+    def generate_template(self) -> BytesIO:
+        """Generate an empty Excel template for RMPM Opening Balance Upload."""
+        df = pd.DataFrame(columns=[
+            "Business Date",
+            "Material Code",
+            "Material Name",
+            "Current Stock"
+        ])
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name="RMPM_Upload")
+        output.seek(0)
+        return output
 
     def preview_opening_balance(
         self, file_bytes: bytes, filename: str, *,
@@ -471,7 +484,6 @@ class InventoryService:
 
         # Pre-fetch for bulk lookup to avoid N+1 queries
         mat_codes = df.get("Material Code", pd.Series(dtype=str)).dropna().unique().tolist()
-        wh_names = df.get("Warehouse", pd.Series(dtype=str)).dropna().unique().tolist()
 
         materials_db = self._db.scalars(
             select(Material)
@@ -480,12 +492,16 @@ class InventoryService:
         ).all()
         material_map = {m.code: m for m in materials_db}
 
-        warehouses_db = self._db.scalars(
+        rmpm_warehouse = self._db.scalar(
             select(Warehouse)
-            .where(Warehouse.name.in_(wh_names))
+            .where(Warehouse.type == 'RMPM')
             .where(Warehouse.deleted_at.is_(None))
-        ).all()
-        warehouse_map = {w.name: w for w in warehouses_db}
+        )
+        if not rmpm_warehouse:
+            return OpeningBalanceUploadPreview(
+                total_rows=0, valid_rows=0, error_rows=0, warning_rows=0,
+                rows=[], warnings=[], errors=["System missing RMPM warehouse."]
+            )
 
         rows_out: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -501,10 +517,9 @@ class InventoryService:
         for idx, row in df.iterrows():
             row_num = int(idx) + 2  # header on row 1
             mat_code = str(row.get("Material Code", "")).strip()
-            qty_raw = str(row.get("Quantity", "")).strip()
-            uom_raw = str(row.get("UoM", "")).strip()
-            wh_name = str(row.get("Warehouse", "")).strip()
-            date_raw = str(row.get("Date", "")).strip()
+            qty_raw = str(row.get("Current Stock", "")).strip()
+            mat_name_raw = str(row.get("Material Name", "")).strip()
+            date_raw = str(row.get("Business Date", "")).strip()
 
             row_status = "valid"
             row_messages: list[str] = []
@@ -555,23 +570,16 @@ class InventoryService:
                 row_status = "error"
                 row_messages.append(f"Material code '{mat_code}' not found.")
                 unknown_materials_count += 1
-            elif material.uom.lower() != uom_raw.lower():
-                row_status = "error"
-                row_messages.append(
-                    f"UoM mismatch: uploaded '{uom_raw}', expected '{material.uom}'."
-                )
             
             if material is not None:
                 unique_materials.add(mat_code)
 
             # --- Warehouse ---
-            warehouse = warehouse_map.get(wh_name)
-            if warehouse is None:
+            warehouse = rmpm_warehouse
+            wh_name = warehouse.name
+            if not is_admin and user_warehouse_id and warehouse.id != user_warehouse_id:
                 row_status = "error"
-                row_messages.append(f"Warehouse '{wh_name}' not found.")
-            elif not is_admin and user_warehouse_id and warehouse.id != user_warehouse_id:
-                row_status = "error"
-                row_messages.append(f"Not authorized to upload inventory for warehouse '{wh_name}'.")
+                row_messages.append(f"Not authorized to upload inventory for RMPM warehouse.")
 
             # --- Duplicate detection ---
             dup_key = (mat_code, wh_name, date_raw)
@@ -597,7 +605,7 @@ class InventoryService:
                     "row": row_num,
                     "material_code": mat_code,
                     "warehouse": wh_name,
-                    "uom": uom_raw,
+                    "uom": material.uom if material else "",
                     "quantity": qty_raw,
                     "date": date_raw,
                     "status": row_status,
@@ -660,8 +668,8 @@ class InventoryService:
         valid_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
         errors_found: list[str] = []
 
+        # Pre-fetch for bulk lookup to avoid N+1 queries
         mat_codes = df.get("Material Code", pd.Series(dtype=str)).dropna().unique().tolist()
-        wh_names = df.get("Warehouse", pd.Series(dtype=str)).dropna().unique().tolist()
 
         materials_db = self._db.scalars(
             select(Material)
@@ -670,19 +678,19 @@ class InventoryService:
         ).all()
         material_map = {m.code: m for m in materials_db}
 
-        warehouses_db = self._db.scalars(
+        rmpm_warehouse = self._db.scalar(
             select(Warehouse)
-            .where(Warehouse.name.in_(wh_names))
+            .where(Warehouse.type == 'RMPM')
             .where(Warehouse.deleted_at.is_(None))
-        ).all()
-        warehouse_map = {w.name: w for w in warehouses_db}
+        )
+        if not rmpm_warehouse:
+            raise ValidationError("System missing RMPM warehouse.")
 
         for _, row in df.iterrows():
             mat_code = str(row.get("Material Code", "")).strip()
-            qty_raw = str(row.get("Quantity", "")).strip()
-            uom_raw = str(row.get("UoM", "")).strip()
-            wh_name = str(row.get("Warehouse", "")).strip()
-            date_raw = str(row.get("Date", "")).strip()
+            qty_raw = str(row.get("Current Stock", "")).strip()
+            mat_name_raw = str(row.get("Material Name", "")).strip()
+            date_raw = str(row.get("Business Date", "")).strip()
 
             try:
                 qty = Decimal(qty_raw)
@@ -721,18 +729,11 @@ class InventoryService:
             if material is None:
                 errors_found.append(f"Material code '{mat_code}' not found.")
                 continue
-            if material.uom.lower() != uom_raw.lower():
-                errors_found.append(
-                    f"UoM mismatch for '{mat_code}': '{uom_raw}' vs expected '{material.uom}'."
-                )
-                continue
 
-            warehouse = warehouse_map.get(wh_name)
-            if warehouse is None:
-                errors_found.append(f"Warehouse '{wh_name}' not found.")
-                continue
+            warehouse = rmpm_warehouse
+            wh_name = warehouse.name
             if not is_admin and user_warehouse_id and warehouse.id != user_warehouse_id:
-                errors_found.append(f"Not authorized to upload inventory for warehouse '{wh_name}'.")
+                errors_found.append(f"Not authorized to upload inventory for RMPM warehouse.")
                 continue
 
             dup_key = (mat_code, wh_name, str(parsed_date))

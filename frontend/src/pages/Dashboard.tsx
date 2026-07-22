@@ -5,8 +5,10 @@ import { useAuth } from '@/contexts/AuthContext'
 import { requestsApi } from '@/api/requests'
 import { inventoryApi } from '@/api/inventory'
 import { masterApi } from '@/api/master'
+import { reportsApi } from '@/api/reports'
 import { MetricCard } from '@/components/enterprise/MetricCard'
 import { StatusBadge } from '@/components/enterprise/StatusBadge'
+import { TrendsChart } from '@/components/enterprise/TrendsChart'
 import { Table, Tr, Td } from '@/components/ui/table'
 import { formatDate, formatDateTime } from '@/lib/utils'
 import {
@@ -49,6 +51,12 @@ export function DashboardPage() {
     queryKey: ['master', 'boms', 'history'],
     queryFn: () => masterApi.getBOMUploadHistory(),
     enabled: hasPermission('master:read'),
+  })
+
+  const { data: trendsData, isLoading: trendsLoading, isError: trendsError } = useQuery({
+    queryKey: ['reports', 'inventory-trends'],
+    queryFn: () => reportsApi.getInventoryTrends({ days: 15 }),
+    enabled: hasPermission('reports:read'),
   })
 
   const requests = useMemo(() => requestsData?.data ?? [], [requestsData])
@@ -157,6 +165,31 @@ export function DashboardPage() {
           onClick={() => navigate('/inventory/balances')}
         />
       </div>
+
+      {/* Inventory Trends Full Width */}
+      {hasPermission('reports:read') && (
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col p-6">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-2">
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">Inventory Trends</h3>
+              <p className="text-xs text-slate-500">15-day movement overview (Receipts vs Dispatches)</p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/reports/variance')}
+              className="text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-medium"
+            >
+              Detailed Report <ArrowRight className="h-3.5 w-3.5 ml-1" />
+            </Button>
+          </div>
+          <TrendsChart 
+            data={trendsData?.data} 
+            isLoading={trendsLoading} 
+            isError={trendsError} 
+          />
+        </div>
+      )}
 
       {/* Tables & Operational Streams Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

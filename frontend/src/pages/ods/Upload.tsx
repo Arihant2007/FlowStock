@@ -2,13 +2,13 @@ import { useState, useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
-import { inventoryApi } from '@/api/inventory'
+import { requestsApi } from '@/api/requests'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Tr, Td } from '@/components/ui/table'
 import { getErrorMessage } from '@/lib/utils'
 import { Upload, CheckCircle2, AlertCircle, FileSpreadsheet, ChevronRight, Check, Download } from 'lucide-react'
-import type { OpeningBalanceUploadPreview } from '@/types/api'
+// Removed unused import
 
 const fadeVariants = {
   hidden: { opacity: 0, y: 10 },
@@ -16,16 +16,16 @@ const fadeVariants = {
   exit: { opacity: 0, y: -10, transition: { duration: 0.2 } },
 }
 
-export function InventoryUploadPage() {
+export function ODSUploadPage() {
   const qc = useQueryClient()
   const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<OpeningBalanceUploadPreview | null>(null)
+  const [preview, setPreview] = useState<any>(null)
   const [step, setStep] = useState<'upload' | 'preview' | 'done'>('upload')
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const previewMutation = useMutation({
-    mutationFn: (f: File) => inventoryApi.previewUpload(f),
+    mutationFn: (f: File) => requestsApi.previewUpload(f),
     onSuccess: (data) => {
       setPreview(data.data)
       setStep('preview')
@@ -37,11 +37,11 @@ export function InventoryUploadPage() {
   })
 
   const commitMutation = useMutation({
-    mutationFn: (f: File) => inventoryApi.commitUpload(f, true),
+    mutationFn: (payload: any) => requestsApi.commitUpload(payload),
     onSuccess: (data) => {
       const res = data.data as any
-      toast.success(`Inventory updated! ${res.adjustments_created} adjustment(s) created.`)
-      qc.invalidateQueries({ queryKey: ['inventory'] })
+      toast.success(`Requests created successfully!`)
+      qc.invalidateQueries({ queryKey: ['requests'] })
       setStep('done')
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -81,11 +81,11 @@ export function InventoryUploadPage() {
 
   const handleDownloadTemplate = async () => {
     try {
-      const res = await inventoryApi.downloadTemplate()
+      const res = await requestsApi.downloadODSTemplate()
       const url = window.URL.createObjectURL(new Blob([res.data]))
       const link = document.createElement('a')
       link.href = url
-      link.setAttribute('download', 'RMPM_Upload_Template.xlsx')
+      link.setAttribute('download', 'ODS_Upload_Template.xlsx')
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -96,8 +96,8 @@ export function InventoryUploadPage() {
   }
 
   const steps = [
-    { id: 'upload', label: 'Upload Snapshot' },
-    { id: 'preview', label: 'Preview Reconciliations' },
+    { id: 'upload', label: 'Upload ODS Excel' },
+    { id: 'preview', label: 'Preview Requirements' },
     { id: 'done', label: 'Complete' },
   ]
   const currentStepIndex = steps.findIndex(s => s.id === step)
@@ -106,8 +106,8 @@ export function InventoryUploadPage() {
     <div className="max-w-6xl mx-auto space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Inventory Snapshot Upload</h1>
-        <p className="text-muted-foreground mt-1">Upload daily closing balances to reconcile the system ledger.</p>
+        <h1 className="text-3xl font-bold tracking-tight">ODS Daily Upload</h1>
+        <p className="text-muted-foreground mt-1">Upload daily production requirements to automatically generate material requests.</p>
       </div>
 
       {/* Modern Stepper */}
@@ -147,7 +147,7 @@ export function InventoryUploadPage() {
                 <div>
                   <CardTitle>Select Excel File</CardTitle>
                   <CardDescription className="mt-1">
-                    Expected columns: Business Date, Material Code, Material Name, Current Stock
+                    Expected columns: Business Date, SKU, FG Quantity, Material, Material Type (RM / PM), Remaining Quantity
                   </CardDescription>
                 </div>
                 <Button variant="outline" size="sm" onClick={handleDownloadTemplate} className="gap-2">
@@ -201,17 +201,11 @@ export function InventoryUploadPage() {
                     <div className="p-2 bg-emerald-100 rounded-lg text-emerald-600">
                       <CheckCircle2 className="h-5 w-5" />
                     </div>
-                    Row Statistics
+                    Upload Summary
                   </div>
                   <div className="grid grid-cols-2 gap-y-2 mt-4 text-sm">
-                    <span className="text-muted-foreground">Total Rows:</span>
-                    <span className="font-medium">{preview.total_rows}</span>
-                    <span className="text-muted-foreground">Valid Rows:</span>
-                    <span className="font-semibold text-emerald-700">{preview.valid_rows}</span>
-                    <span className="text-muted-foreground">Error Rows:</span>
-                    <span className={`font-semibold ${preview.error_rows > 0 ? 'text-destructive' : ''}`}>{preview.error_rows}</span>
-                    <span className="text-muted-foreground">Warnings:</span>
-                    <span className={`font-semibold ${preview.warning_rows > 0 ? 'text-amber-600' : ''}`}>{preview.warning_rows}</span>
+                    <span className="text-muted-foreground">Total Requests:</span>
+                    <span className="font-medium">{preview.parsed_data?.length || 0}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -222,13 +216,11 @@ export function InventoryUploadPage() {
                     <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
                       <FileSpreadsheet className="h-5 w-5" />
                     </div>
-                    Inventory Totals
+                    Material Requirements
                   </div>
                   <div className="grid grid-cols-2 gap-y-2 mt-4 text-sm">
-                    <span className="text-muted-foreground">Total Materials:</span>
-                    <span className="font-medium text-blue-900">{preview.total_materials}</span>
-                    <span className="text-muted-foreground">Total Quantity:</span>
-                    <span className="font-semibold text-blue-900">{parseFloat(preview.total_quantity).toLocaleString()}</span>
+                    <span className="text-muted-foreground">SKUs:</span>
+                    <span className="font-medium text-blue-900">{preview.parsed_data ? preview.parsed_data.length : 0}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -241,22 +233,16 @@ export function InventoryUploadPage() {
                     </div>
                     Validation Issues
                   </div>
-                  <div className="grid grid-cols-2 gap-y-2 mt-4 text-sm">
-                    <span className="text-muted-foreground">Duplicates:</span>
-                    <span className={`font-medium ${preview.duplicates > 0 ? 'text-amber-600' : ''}`}>{preview.duplicates}</span>
-                    <span className="text-muted-foreground">Unknown Mats:</span>
-                    <span className={`font-medium ${preview.unknown_materials > 0 ? 'text-destructive' : ''}`}>{preview.unknown_materials}</span>
-                    <span className="text-muted-foreground">Negative Qty:</span>
-                    <span className={`font-medium ${preview.negative_quantities > 0 ? 'text-destructive' : ''}`}>{preview.negative_quantities}</span>
-                  </div>
+                    <span className="text-muted-foreground">Errors:</span>
+                    <span className={`font-medium ${preview.errors?.length > 0 ? 'text-destructive' : ''}`}>{preview.errors?.length || 0}</span>
                 </CardContent>
               </Card>
             </div>
 
             {/* Global Errors & Warnings */}
-            {(preview.errors.length > 0 || preview.warnings.length > 0) && (
+            {(preview.errors?.length > 0 || preview.warnings?.length > 0) && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {preview.errors.length > 0 && (
+                {preview.errors?.length > 0 && (
                   <Card className="rounded-2xl border-destructive/20 bg-destructive/5 shadow-sm">
                     <CardHeader className="pb-2 px-6 pt-6">
                       <CardTitle className="text-base text-destructive flex items-center gap-2">
@@ -265,13 +251,13 @@ export function InventoryUploadPage() {
                     </CardHeader>
                     <CardContent className="px-6 pb-6 pt-0">
                       <ul className="space-y-1.5 mt-2">
-                        {preview.errors.map((e, i) => <li key={i} className="text-sm text-destructive/80 flex items-start gap-2"><span className="mt-1">•</span>{e}</li>)}
+                        {preview.errors?.map((e: any, i: number) => <li key={i} className="text-sm text-destructive/80 flex items-start gap-2"><span className="mt-1">•</span>{e}</li>)}
                       </ul>
                     </CardContent>
                   </Card>
                 )}
                 
-                {preview.warnings.length > 0 && (
+                {preview.warnings?.length > 0 && (
                   <Card className="rounded-2xl border-amber-200/50 bg-amber-50/50 shadow-sm">
                     <CardHeader className="pb-2 px-6 pt-6">
                       <CardTitle className="text-base text-amber-700 flex items-center gap-2">
@@ -280,7 +266,7 @@ export function InventoryUploadPage() {
                     </CardHeader>
                     <CardContent className="px-6 pb-6 pt-0">
                       <ul className="space-y-1.5 mt-2">
-                        {preview.warnings.map((w, i) => <li key={i} className="text-sm text-amber-700/80 flex items-start gap-2"><span className="mt-1">•</span>{w}</li>)}
+                        {preview.warnings?.map((w: any, i: number) => <li key={i} className="text-sm text-amber-700/80 flex items-start gap-2"><span className="mt-1">•</span>{w}</li>)}
                       </ul>
                     </CardContent>
                   </Card>
@@ -295,23 +281,22 @@ export function InventoryUploadPage() {
                 <CardDescription>Review the processed snapshot before committing to the ledger.</CardDescription>
               </CardHeader>
               <div className="overflow-auto flex-1">
-                <Table headers={['Row', 'Material', 'Warehouse', 'Qty', 'Status', 'Messages']} isEmpty={preview.rows.length === 0} className="border-0">
-                  {preview.rows.map((row) => (
-                    <Tr key={row.row} className="hover:bg-muted/30">
-                      <Td className="text-muted-foreground w-16 text-center">{row.row}</Td>
-                      <Td className="font-mono text-xs font-medium">{row.material_code}</Td>
-                      <Td className="font-medium text-sm">{row.warehouse}</Td>
-                      <Td>{row.quantity}</Td>
+                <Table headers={['Business Date', 'SKU', 'FG Qty', 'Requirements']} isEmpty={!preview.parsed_data || preview.parsed_data.length === 0} className="border-0">
+                  {preview.parsed_data?.map((row: any, idx: number) => (
+                    <Tr key={idx} className="hover:bg-muted/30">
+                      <Td className="text-muted-foreground w-32">{row.business_date}</Td>
+                      <Td className="font-mono text-sm font-medium">{row.sku_code}</Td>
+                      <Td className="font-medium text-sm">{row.fg_quantity}</Td>
                       <Td>
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                          row.status === 'valid' ? 'bg-emerald-100 text-emerald-700' :
-                          row.status === 'error' ? 'bg-destructive/10 text-destructive' :
-                          'bg-amber-100 text-amber-700'
-                        }`}>
-                          {row.status.toUpperCase()}
-                        </span>
+                        <div className="space-y-1">
+                          {row.items.map((item: any) => (
+                            <div key={item.material_code} className="text-xs text-muted-foreground flex gap-2">
+                              <span className="font-medium text-foreground">{item.material_code}</span>: 
+                              Gross {item.gross_required_qty.toFixed(2)} - Rem {item.remaining_from_previous_day.toFixed(2)} = Req <span className="font-bold text-primary">{item.requested_qty.toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
                       </Td>
-                      <Td className="text-muted-foreground text-xs max-w-[250px] truncate" title={row.messages.join(', ')}>{row.messages.join(', ')}</Td>
                     </Tr>
                   ))}
                 </Table>
@@ -324,14 +309,14 @@ export function InventoryUploadPage() {
                 Back to Upload
               </Button>
               <Button
-                onClick={() => file && commitMutation.mutate(file)}
+                onClick={() => preview && commitMutation.mutate(preview)}
                 isLoading={commitMutation.isPending}
-                disabled={preview.error_rows > 0 || commitMutation.isPending}
+                disabled={(preview.errors?.length > 0) || commitMutation.isPending}
                 className="rounded-full px-8 shadow-sm"
                 size="lg"
               >
-                {preview.error_rows > 0 ? 'Resolve Errors to Commit' : 'Commit Snapshot'}
-                {!preview.error_rows && <ChevronRight className="ml-2 h-4 w-4" />}
+                {preview.errors?.length > 0 ? 'Resolve Errors to Commit' : 'Create Requests'}
+                {(!preview.errors || preview.errors.length === 0) && <ChevronRight className="ml-2 h-4 w-4" />}
               </Button>
             </div>
           </motion.div>
@@ -351,13 +336,13 @@ export function InventoryUploadPage() {
                     <CheckCircle2 className="h-10 w-10 text-emerald-600" />
                   </motion.div>
                 </div>
-                <h3 className="text-2xl font-bold tracking-tight mb-2">Reconciliation Complete</h3>
+                <h3 className="text-2xl font-bold tracking-tight mb-2">Upload Complete</h3>
                 <p className="text-muted-foreground max-w-md mx-auto mb-8">
-                  Adjustments have been automatically posted to the ledger to match your uploaded snapshot.
+                  Material requests have been automatically generated based on the ODS upload.
                 </p>
                 <div className="flex gap-4">
                   <Button variant="outline" onClick={() => { setStep('upload'); setFile(null); setPreview(null) }} className="rounded-full px-6">
-                    Upload Another Snapshot
+                    Upload Another ODS Excel
                   </Button>
                 </div>
               </CardContent>

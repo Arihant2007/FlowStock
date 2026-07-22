@@ -56,4 +56,30 @@ export const requestsApi = {
     const { data } = await client.post<ApiResponse<{ status: string }>>(`/requests/${id}/reject`)
     return data
   },
+
+  previewUpload: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await client.post<ApiResponse<any>>(
+      '/requests/upload/preview',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return data
+  },
+
+  commitUpload: async (payload: any) => {
+    const { data } = await client.post<ApiResponse<{ request_ids: string[] }>>(
+      '/requests/upload/commit',
+      payload
+    )
+    return data
+  },
+
+  downloadODSTemplate: async () => {
+    const res = await client.get('/requests/upload/template', {
+      responseType: 'blob',
+    })
+    return res
+  },
 }

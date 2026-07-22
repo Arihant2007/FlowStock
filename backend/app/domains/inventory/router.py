@@ -12,6 +12,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,19 @@ router = APIRouter(prefix="/inventory", tags=["Inventory"])
 # ---------------------------------------------------------------------------
 # Opening Balance Upload (snapshot-based)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/upload/template", status_code=status.HTTP_200_OK)
+def get_rmpm_template(
+    current_user: User = Depends(require_permission("inventory:upload")),
+):
+    """Download RMPM Opening Balance Upload template."""
+    output = InventoryService(None).generate_template()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=RMPM_Upload_Template.xlsx"},
+    )
 
 
 @router.post("/upload/preview", response_model=dict, status_code=status.HTTP_200_OK)

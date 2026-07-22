@@ -450,3 +450,84 @@ def export_production_report(
         ])
 
     return generate_export(df, "Daily_Production_Report", format_type)
+
+@router.get("/inventory-trends", response_model=dict, status_code=status.HTTP_200_OK)
+def get_inventory_trends(
+    days: int = Query(30, ge=1, le=365),
+    warehouse: str = Query("All"),
+    material: str = Query("All"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("reports:read")),
+) -> dict:
+    from datetime import datetime, timedelta
+    from sqlalchemy import cast, Date, Integer
+    
+    start_date = datetime.utcnow().date() - timedelta(days=days)
+    
+    query = select(
+        cast(InventoryTransaction.created_at, Date).label('date'),
+        InventoryTransaction.transaction_type,
+        func.sum(InventoryTransaction.quantity).label('total_qty')
+    ).where(InventoryTransaction.created_at >= str(start_date))
+
+    if warehouse != "All":
+        wh = db.scalar(select(Warehouse).where(Warehouse.public_id == warehouse))
+        if wh:
+            query = query.where(
+                (InventoryTransaction.source_warehouse_id == wh.id) |
+                (InventoryTransaction.destination_warehouse_id == wh.id)
+            )
+
+    if material != "All":
+        mat = db.scalar(select(Material).where(Material.public_id == material))
+        if mat:
+            query = query.where(InventoryTransaction.material_id == mat.id)
+
+    query = query.group_by(
+        cast(InventoryTransaction.created_at, Date),
+        InventoryTransaction.transaction_type
+    ).order_by(cast(InventoryTransaction.created_at, Date))
+
+    results = db.execute(query).all()
+    
+    # Generate continuous date range
+    date_list = [(start_date + timedelta(days=i)).isoformat() for i in range(days + 1)]
+    
+    dispatch_dict = {d: 0 for d in date_list}
+    receipt_dict = {d: 0 for d in date_list}
+    adjustment_dict = {d: 0 for d in date_list}
+    reservation_dict = {d: 0 for d in date_list}
+    
+    for r in results:
+        d_str = r.date.isoformat()
+        if d_str not in date_list:
+            continue
+        
+        qty = float(r.total_qty or 0)
+        t_type = r.transaction_type
+        
+        if t_type == "DISPATCH":
+            dispatch_dict[d_str] += qty
+        elif t_type == "RECEIPT":
+            receipt_dict[d_str] += qty
+        elif t_type == "ADJUSTMENT":
+            adjustment_dict[d_str] += qty
+        elif t_type == "RESERVATION":
+            reservation_dict[d_str] += qty
+            
+    net_movement = [
+        (receipt_dict[d] + adjustment_dict[d]) - (dispatch_dict[d] + reservation_dict[d])
+        for d in date_list
+    ]
+    
+    return {
+        "success": True,
+        "data": {
+            "dates": date_list,
+            "dispatch": [dispatch_dict[d] for d in date_list],
+            "receipt": [receipt_dict[d] for d in date_list],
+            "adjustment": [adjustment_dict[d] for d in date_list],
+            "reservation": [reservation_dict[d] for d in date_list],
+            "netMovement": net_movement
+        }
+    }

@@ -14,7 +14,8 @@ Endpoints:
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,9 +33,47 @@ from app.domains.requests.schemas import (
     RequestPreviewPayload,
 )
 from app.domains.requests.service import RequestService
+from app.domains.requests.upload_service import ODSUploadService
 from app.infrastructure.database import get_db
+from app.utils.file_validation import validate_upload_file
 
 router = APIRouter(prefix="/requests", tags=["Material Requests"])
+
+
+@router.get("/upload/template", status_code=status.HTTP_200_OK)
+def get_ods_template(
+    current_user: User = Depends(require_permission("requests:create")),
+):
+    """Download ODS Daily Upload template."""
+    output = ODSUploadService(None).generate_template()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=ODS_Upload_Template.xlsx"},
+    )
+
+
+@router.post("/upload/preview", response_model=dict, status_code=status.HTTP_200_OK)
+async def preview_ods_upload(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("requests:create")),
+) -> dict:
+    """Preview material requirements from ODS daily upload Excel."""
+    content = await validate_upload_file(file, db)
+    preview = ODSUploadService(db).preview_upload(content, current_user.id)
+    return ok(preview, message="File parsed. Review preview before committing.")
+
+
+@router.post("/upload/commit", response_model=dict, status_code=status.HTTP_200_OK)
+def commit_ods_upload(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("requests:create")),
+) -> dict:
+    """Commit ODS daily upload and create material requests."""
+    res = ODSUploadService(db).commit_upload(payload, current_user.id)
+    return ok(res, message="Requests created successfully.")
 
 
 @router.post("/preview", response_model=dict, status_code=status.HTTP_200_OK)

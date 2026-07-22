@@ -74,6 +74,7 @@ const NAV_ITEMS: NavItem[] = [
     icon: BookOpen,
     permission: 'requests:create',
     children: [
+      { label: 'Upload Requests', href: '/ods/upload', icon: Upload },
       { label: 'New Request', href: '/ods/new-request', icon: ClipboardList },
       { label: 'My Requests', href: '/ods/requests', icon: BookOpen },
     ],

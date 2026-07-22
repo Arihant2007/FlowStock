@@ -24,6 +24,10 @@ export const reportsApi = {
     client.get('/reports/production', { params }).then((res) => res.data),
   exportProduction: (params: Record<string, any>) =>
     client.get('/reports/production/export', { params, responseType: 'blob' }),
+
+  // Dashboard Trends
+  getInventoryTrends: (params: Record<string, any>) =>
+    client.get('/reports/inventory-trends', { params }).then((res) => res.data),
 }
 
 // Utility to handle downloading the blob

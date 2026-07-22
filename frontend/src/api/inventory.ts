@@ -84,4 +84,11 @@ export const inventoryApi = {
     })
     return res
   },
+
+  downloadTemplate: async () => {
+    const res = await client.get('/inventory/upload/template', {
+      responseType: 'blob',
+    })
+    return res
+  },
 }

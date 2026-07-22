@@ -7,11 +7,13 @@ from fastapi.responses import StreamingResponse
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
-ExportFormat = Literal["csv", "excel"]
+from fpdf import FPDF
+
+ExportFormat = Literal["csv", "excel", "pdf"]
 
 
 def generate_export(
-    df: pd.DataFrame, report_name: str, export_format: ExportFormat = "excel"
+    df: pd.DataFrame, report_name: str, export_format: ExportFormat = "excel", metadata: dict | None = None
 ) -> StreamingResponse:
     """Generate a StreamingResponse containing either a CSV or an Excel file.
 
@@ -69,6 +71,56 @@ def generate_export(
             worksheet.column_dimensions[col_letter].width = max_len + 2
 
     output.seek(0)
+
+    if export_format == "pdf":
+        class PDF(FPDF):
+            def header(self):
+                self.set_font("helvetica", "B", 14)
+                self.cell(0, 10, "ITC FMCG Warehouse Management System", ln=True, align="C")
+                self.set_font("helvetica", "B", 12)
+                self.cell(0, 10, f"Report: {report_name.replace('_', ' ')}", ln=True, align="C")
+                self.set_font("helvetica", "", 10)
+                self.cell(0, 10, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align="C")
+                if metadata:
+                    for k, v in metadata.items():
+                        self.cell(0, 6, f"{k}: {v}", ln=True, align="C")
+                self.ln(5)
+
+            def footer(self):
+                self.set_y(-15)
+                self.set_font("helvetica", "I", 8)
+                self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
+
+        # Use landscape for wide tables
+        orientation = "L" if len(df.columns) > 5 else "P"
+        pdf = PDF(orientation=orientation, format="A4")
+        pdf.add_page()
+        pdf.set_font("helvetica", size=8)
+
+        # Calculate column widths
+        page_width = pdf.w - 2 * pdf.l_margin
+        col_count = len(df.columns)
+        col_width = page_width / col_count if col_count > 0 else 0
+
+        # Header
+        pdf.set_font("helvetica", "B", 8)
+        for col in df.columns:
+            pdf.cell(col_width, 8, str(col), border=1, align="C")
+        pdf.ln()
+
+        # Rows
+        pdf.set_font("helvetica", "", 8)
+        for _, row in df.iterrows():
+            for val in row:
+                pdf.cell(col_width, 8, str(val)[:50], border=1) # Truncate long strings
+            pdf.ln()
+
+        pdf_bytes = pdf.output()
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}.pdf"},
+        )
 
     return StreamingResponse(
         output,
