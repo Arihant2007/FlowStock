@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
+import { Analytics } from '@vercel/analytics/react'
 import './index.css'
 import { AppRouter } from './router'
 import { AuthProvider } from './contexts/AuthContext'
@@ -21,6 +22,7 @@ createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <AppRouter />
         <Toaster position="top-right" richColors closeButton />
+        <Analytics />
       </AuthProvider>
     </QueryClientProvider>
   </StrictMode>
