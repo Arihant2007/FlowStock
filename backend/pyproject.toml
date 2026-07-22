@@ -25,6 +25,7 @@ dependencies = [
     "python-dateutil==2.9.0.post0",
     "structlog==24.4.0",
     "prometheus-fastapi-instrumentator==8.0.2",
+    "fpdf2>=2.8.2",
 ]
 
 [tool.hatch.build.targets.wheel]
